@@ -1,0 +1,8 @@
+# Phase 1: demo API + traffic generator
+fastapi
+uvicorn
+httpx
+
+# Phase 2-4: detection + AI
+pandas
+scikit-learn

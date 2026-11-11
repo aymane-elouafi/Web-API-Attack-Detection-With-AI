@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Attack Detection</title>
+<style>
+:root{color-scheme:light dark;--bg:#f5f5f7;--card:#fff;--ink:#1d1d1f;--mute:#6e6e73;--line:rgba(0,0,0,.08);--accent:#0071e3;--bad:#d70015;--good:#248a3d;
+--glass:rgba(245,245,247,.72);--hot:rgba(215,0,21,.09);--warm:rgba(255,159,10,.12);--shadow:0 1px 2px rgba(0,0,0,.04),0 8px 24px rgba(0,0,0,.05);
+--ease:cubic-bezier(.22,1,.36,1)}
+@media(prefers-color-scheme:dark){:root{--bg:#000;--card:#1c1c1e;--ink:#f5f5f7;--mute:#98989d;--line:rgba(255,255,255,.1);--accent:#2997ff;--bad:#ff453a;--good:#32d74b;
+--glass:rgba(28,28,30,.72);--hot:rgba(255,69,58,.16);--warm:rgba(255,159,10,.16);--shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.35)}}
+@media(prefers-reduced-transparency:reduce){:root{--glass:var(--card)}}
+@media(prefers-contrast:more){:root{--line:currentColor;--mute:var(--ink)}}
+*{box-sizing:border-box}html{font-size:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:400 .9375rem/1.5 system-ui,-apple-system,"SF Pro Text",sans-serif;-webkit-font-smoothing:antialiased}
+header{position:sticky;top:0;z-index:5;background:var(--glass);-webkit-backdrop-filter:blur(24px) saturate(180%);backdrop-filter:blur(24px) saturate(180%);border-bottom:1px solid var(--line)}
+header .in{max-width:1100px;margin:0 auto;padding:.75rem 1rem;display:flex;gap:1rem;align-items:center;flex-wrap:wrap}
+h1{font:600 1.375rem/1.1 system-ui,-apple-system,"SF Pro Display",sans-serif;letter-spacing:-.022em;margin:0;flex:1 1 14rem}
+h1 small{display:block;font:400 .8125rem/1.4 system-ui,sans-serif;letter-spacing:0;color:var(--mute);margin-top:.2rem}
+h2{font:600 1.0625rem/1.2 system-ui,sans-serif;letter-spacing:-.012em;margin:0 0 .75rem}
+main{max-width:1100px;margin:0 auto;padding:1.25rem 1rem 3rem}
+.sub{color:var(--mute);font-size:.8125rem;letter-spacing:.005em}
+.card{background:var(--card);border-radius:18px;padding:1.125rem;margin-bottom:1rem;box-shadow:var(--shadow);animation:rise .5s var(--ease) both}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(9rem,1fr));gap:.75rem;margin-bottom:1rem}
+.kpis .card{margin:0;padding:.9rem 1rem}.kpi b{display:block;font:600 1.75rem/1.1 system-ui,sans-serif;letter-spacing:-.025em;font-variant-numeric:tabular-nums}.kpi span{color:var(--mute);font-size:.75rem;letter-spacing:.01em}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}th,td{text-align:left;padding:.55rem .6rem;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}th{color:var(--mute);font-weight:500;font-size:.75rem;letter-spacing:.02em;white-space:nowrap}
+.wrap{overflow-x:auto}.bar{height:6px;background:var(--line);border-radius:3px;min-width:56px;overflow:hidden;margin-bottom:.15rem}
+.bar i{display:block;height:100%;background:var(--accent);border-radius:3px;transition:width .5s var(--ease)}
+.bad{color:var(--bad)}.good{color:var(--good)}code{font:.78rem/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all}
+.tag{display:inline-block;padding:.05rem .5rem;border-radius:999px;background:var(--bg);font-size:.72rem;margin:0 .25rem .25rem 0}
+.row{display:flex;gap:.75rem;align-items:center;flex-wrap:wrap}
+select,button{font:inherit;color:var(--ink);background:var(--bg);border:0;border-radius:999px;padding:.35rem .9rem;cursor:pointer;transition:transform .1s ease-out,background .2s}
+button#play{background:var(--accent);color:#fff;font-weight:500;min-width:5rem}
+select:active,button:active{transform:scale(.96)}button:focus-visible,select:focus-visible,input:focus-visible,tr.click:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+input[type=range]{accent-color:var(--accent);flex:1 1 9rem;min-width:9rem}
+.hot{background:var(--hot)}.warm{background:var(--warm)}tr.click{cursor:pointer;transition:background .15s}tr.click:hover{background:var(--bg)}tr.click:active{transform:scale(.995)}
+.feed{max-height:21rem;overflow-y:auto;overscroll-behavior:contain}.feed tr{animation:slide .45s var(--ease)}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}}@keyframes slide{from{opacity:0;transform:translateY(-10px)}}
+@media(max-width:600px){main{padding:1rem .75rem 2.5rem}th,td{padding:.45rem .35rem}.card{border-radius:16px;padding:.9rem}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition-duration:.01ms!important}.card,.feed tr{animation:fade .2s!important}}
+@keyframes fade{from{opacity:0}}
+</style></head><body><header><div class="in"><h1>Web API Attack Detection<small>Rules + Coraza + two AI models, fused into one risk score. Evaluation view.</small></h1>
+<label class="row" style="flex:1 1 16rem">Threshold <b id="tv" style="min-width:2.5em">0.50</b><input id="th" type="range" min="0.1" max="0.9" step="0.05" value="0.5" aria-label="Alert threshold"></label></div></header>
+<main>
+<div class="kpis" id="kpis"></div>
+<div class="card wrap"><h2>Detectors</h2><table id="det"></table></div>
+<div class="card wrap"><h2>Recall by attack type</h2><table id="types"></table></div>
+<div class="card wrap"><div class="row"><h2 style="margin:0">Alerts</h2>
+<select id="show"><option value="flagged">Flagged by hybrid</option><option value="missed">Missed attacks</option><option value="false_alarms">False alarms</option></select>
+<span class="sub" id="count" style="margin:0"></span></div><table id="alerts" style="margin-top:8px"></table></div>
+<div class="card wrap"><h2>Clients <span class="sub" id="ccount" style="margin:0"></span></h2><table id="clients"></table></div>
+<div class="card wrap" id="ctl" hidden><div class="row"><h2 style="margin:0">Timeline: <span id="cname"></span></h2><button id="cclose">Close</button></div><table id="timeline" style="margin-top:8px"></table></div>
+<div class="card"><div class="row"><h2 style="margin:0">Live feed (replay)</h2><button id="play">Play</button>
+<select id="speed"><option value="1">1x</option><option value="4" selected>4x</option><option value="20">20x</option></select>
+<span class="sub" id="fcount" style="margin:0"></span></div><div class="feed wrap"><table id="feed"></table></div></div>
+</main><script>
+const $=id=>document.getElementById(id),pct=x=>(x*100).toFixed(1)+'%';
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const cls=r=>r.risk>=+$('th').value?'hot':r.risk>=0.25?'warm':'';
+const rowHtml=r=>`<tr class="${cls(r)}"><td><b>${r.risk}</b></td><td><code>${r.method} ${esc(r.request)} ${esc(r.body)}</code><div class="sub" style="margin:0">${r.client} · status ${r.status}</div></td>
+  <td>${Object.entries(r.why).map(([k,v])=>`<span class="tag">${k} ${v}</span>`).join('')}<div class="sub" style="margin:0">${esc(r.rule_hits)} ${esc(r.coraza_rules)}</div></td>
+  <td class="${r.truth==='normal'?'good':'bad'}">${r.truth}</td></tr>`;
+const HEAD='<tr><th>Risk</th><th>Request</th><th>Why</th><th>Truth</th></tr>';
+async function loadClients(){const c=await get('/api/clients?threshold='+$('th').value);$('ccount').textContent=`top ${c.rows.length} of ${c.total} by riskiest request`;
+ $('clients').innerHTML='<tr><th>Client</th><th>Requests</th><th>Flagged</th><th>Max risk</th><th>Mean risk</th><th>Truth</th></tr>'+c.rows.map(r=>
+  `<tr class="click" tabindex="0" data-ip="${r.client}"><td>${r.client}</td><td>${r.requests}</td><td>${r.flagged}</td><td><b>${r.max_risk}</b></td><td>${r.mean_risk}</td><td class="${r.attacks?'bad':'good'}">${esc(r.truth)}</td></tr>`).join('');}
+$('clients').onclick=async e=>{const tr=e.target.closest('tr[data-ip]');if(!tr)return;const ip=tr.dataset.ip;
+ const d=await get(`/api/client?ip=${encodeURIComponent(ip)}&threshold=${$('th').value}`);$('cname').textContent=`${ip} (${d.rows.length} requests)`;
+ $('timeline').innerHTML=HEAD+d.rows.map(r=>rowHtml(r).replace('<td><b>',`<td>${r.flags.map(f=>`<span class="tag">${f}</span>`).join('')}<br><b>`)).join('');$('ctl').hidden=false;$('ctl').scrollIntoView({behavior:'smooth'})};
+$('cclose').onclick=()=>$('ctl').hidden=true;
+let cursor=-1,timer=null,fed=0;
+async function tick(){const f=await get(`/api/feed?after=${cursor}&n=${$('speed').value*5}&threshold=${$('th').value}`);cursor=f.next;
+ if(f.done){stop();$('fcount').textContent='end of replay';return}
+ $('feed').insertAdjacentHTML('afterbegin',f.rows.slice().reverse().map(rowHtml).join(''));fed+=f.rows.length;$('fcount').textContent=fed+' replayed';
+ while($('feed').rows.length>150)$('feed').deleteRow(-1)}
+function stop(){clearInterval(timer);timer=null;$('play').textContent='Play'}
+$('play').onclick=()=>{if(timer)return stop();if(cursor>=0&&$('fcount').textContent==='end of replay'){cursor=-1;fed=0;$('feed').innerHTML=''}
+ $('play').textContent='Pause';tick();timer=setInterval(tick,1000)};
+async function get(u){const r=await fetch(u);return r.json()}
+async function refresh(){
+ const t=$('th').value;$('tv').textContent=(+t).toFixed(2);
+ const s=await get('/api/summary?threshold='+t),h=s.detectors.at(-1);
+ $('kpis').innerHTML=[['Requests',s.requests],['Attacks',s.attacks],['Hybrid recall',pct(h.recall)],['Hybrid precision',pct(h.precision)],['False alarms',h.false_alarms],['Missed',h.missed]]
+  .map(([k,v])=>`<div class="card kpi"><b>${v}</b><span>${k}</span></div>`).join('');
+ $('det').innerHTML='<tr><th>Detector</th><th>Precision</th><th>Recall</th><th>F1</th><th>Caught</th><th>Missed</th><th>False alarms</th></tr>'+
+  s.detectors.map(d=>`<tr><td>${d.name==='hybrid'?'<b>hybrid (fused)</b>':d.name}</td><td>${pct(d.precision)}</td><td>${pct(d.recall)}</td><td>${pct(d.f1)}</td><td>${d.caught}</td><td>${d.missed}</td><td class="${d.false_alarms?'bad':''}">${d.false_alarms}</td></tr>`).join('');
+ const names=s.detectors.map(d=>d.name);
+ $('types').innerHTML='<tr><th>Attack</th><th>Count</th>'+names.map(n=>`<th>${n}</th>`).join('')+'</tr>'+
+  s.by_type.filter(r=>r.attack_type!=='normal').map(r=>`<tr><td>${r.attack_type}</td><td>${r.attacks}</td>`+names.map(n=>`<td><div class="bar"><i style="width:${r[n]*100}%"></i></div>${pct(r[n])}</td>`).join('')+'</tr>').join('');
+ const a=await get(`/api/alerts?threshold=${t}&show=${$('show').value}&limit=100`);
+ $('count').textContent=`${a.total} total, showing ${a.shown}`;
+ $('alerts').innerHTML='<tr><th>Risk</th><th>Request</th><th>Why</th><th>Truth</th></tr>'+a.rows.map(rowHtml).join('');
+ loadClients();
+}
+$('th').oninput=()=>{clearTimeout(window.tm);window.tm=setTimeout(refresh,150)};$('show').onchange=refresh;refresh();
+</script></body></html>
