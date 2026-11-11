@@ -241,3 +241,8 @@ brute force / credential stuffing.
 
 The demo API is vulnerable on purpose. It only uses an in-memory database and a
 fake file system, and must only be bound to 127.0.0.1. Never deploy it.
+
+## Contributors
+
+- [Aymane Elouafi](https://github.com/aymane-elouafi) -- project owner
+- Claude (Anthropic) -- AI pair programmer; co-author of the commits
