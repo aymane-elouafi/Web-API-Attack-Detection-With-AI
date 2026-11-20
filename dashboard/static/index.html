@@ -5,36 +5,51 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <title>Aegis Console</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%278%27 fill=%27%230071e3%27/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Cdefs%3E%3ClinearGradient id=%27g%27 x1=%270%27 y1=%270%27 x2=%271%27 y2=%271%27%3E%3Cstop offset=%270%27 stop-color=%27%232997ff%27/%3E%3Cstop offset=%271%27 stop-color=%27%235e5ce6%27/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width=%2732%27 height=%2732%27 rx=%277.5%27 fill=%27url(%23g)%27/%3E%3Cpath d=%27M16 6l8 3v6.5c0 5-3.3 8.6-8 10.5-4.7-1.9-8-5.5-8-10.5V9z%27 fill=%27none%27 stroke=%27white%27 stroke-width=%272%27 stroke-linejoin=%27round%27/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <a class="skip" href="#view">Skip to content</a>
 <div id="login" hidden>
-  <form class="sheet-card" id="loginForm">
+  <form class="login-card" id="loginForm">
+    <span class="logo big"></span>
     <h1>Aegis</h1>
-    <p class="muted">Enter the console password.</p>
-    <input id="pw" type="password" autocomplete="current-password" aria-label="Password" autofocus>
-    <button class="btn primary" type="submit">Continue</button>
+    <p class="muted">Enter the console password to continue.</p>
+    <input id="pw" type="password" autocomplete="current-password" aria-label="Password" placeholder="Password" autofocus>
+    <button class="btn primary lg" type="submit">Continue</button>
     <p class="err" id="loginErr" role="alert"></p>
   </form>
 </div>
 <div id="app" hidden>
-  <aside class="side material">
+  <aside class="side material" id="side">
     <div class="brand"><span class="logo"></span><b>Aegis</b></div>
     <nav id="nav" aria-label="Sections"></nav>
     <div class="side-foot"><span id="gwDot" class="dot"></span><span id="gwText" class="muted">Gateway</span></div>
   </aside>
   <main>
-    <div class="stickytop"><header class="top material"><h1 id="title"></h1><div id="topRight"></div></header>
-    <div id="banner" class="banner" role="alert" hidden></div></div>
+    <div class="stickytop">
+      <header class="top material">
+        <h1 id="title"></h1>
+        <div class="top-actions">
+          <button class="pill-btn" id="palBtn" aria-label="Search and commands (Ctrl or Command K)"><span id="palIcon"></span><span class="pill-label">Search</span><kbd>⌘K</kbd></button>
+          <button class="icon-btn" id="themeBtn" aria-label="Change theme"></button>
+          <span id="topRight"></span>
+        </div>
+      </header>
+      <div id="banner" class="banner" role="alert" hidden></div>
+    </div>
     <div id="view" tabindex="-1"></div>
   </main>
+  <nav id="tabbar" class="tabbar material" aria-label="Main"></nav>
 </div>
 <div id="drawerScrim" class="scrim" hidden></div>
-<aside id="drawer" class="drawer material" role="dialog" aria-modal="true" aria-hidden="true" aria-label="Details" inert><div class="drawer-bar"><button class="icon-btn" id="drawerClose" aria-label="Close">&times;</button><span id="drawerTitle"></span></div><div id="drawerBody"></div></aside>
+<aside id="drawer" class="drawer material" role="dialog" aria-modal="true" aria-hidden="true" aria-label="Details" hidden inert>
+  <div class="drawer-bar"><span class="grabber" aria-hidden="true"></span><button class="icon-btn" id="drawerClose" aria-label="Close"></button><span id="drawerTitle"></span></div>
+  <div id="drawerBody"></div>
+</aside>
 <dialog id="dlg"><form method="dialog"><h2 id="dlgTitle"></h2><div id="dlgBody" class="muted"></div><div class="row end"><button class="btn" value="cancel">Cancel</button><button class="btn primary" value="ok" id="dlgOk"></button></div></form></dialog>
-<div id="toast" role="status" aria-live="polite"></div>
+<div id="toast" role="status" aria-live="polite" hidden></div>
+<script src="/static/ui.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

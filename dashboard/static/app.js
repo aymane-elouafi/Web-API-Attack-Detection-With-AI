@@ -1,25 +1,8 @@
 'use strict';
 /* Aegis console: vanilla JS, no dependencies. All text from traffic goes through textContent (h()), never innerHTML. */
-const $ = id => document.getElementById(id);
-const h = (tag, attrs, ...kids) => {
-  const e = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs || {})) {
-    if (k === 'class') e.className = v;
-    else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
-    else if (k === 'value') e.value = v;
-    else if (v === true) e.setAttribute(k, '');
-    else if (v !== false && v != null) e.setAttribute(k, v);
-  }
-  for (const c of kids.flat(Infinity)) if (c != null && c !== false) e.append(c.nodeType ? c : document.createTextNode(c));
-  return e;
-};
-const svg = (tag, attrs) => { const e = document.createElementNS('http://www.w3.org/2000/svg', tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); return e; };
 const pct = x => (x * 100).toFixed(1) + '%';
 const ago = ts => { const s = Math.max(0, Date.now() / 1000 - ts); return s < 90 ? Math.round(s) + 's ago' : s < 5400 ? Math.round(s / 60) + 'm ago' : s < 129600 ? Math.round(s / 3600) + 'h ago' : Math.round(s / 86400) + 'd ago'; };
-const clock = ts => new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-let toastTimer;
-const toast = msg => { const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 3200); };
 
 async function api(path, opts = {}) {
   let r;
@@ -44,10 +27,10 @@ const riskClass = (risk, thr) => risk >= thr ? 'bad' : risk >= 0.3 ? 'warn' : ''
 const riskChip = (risk, thr) => h('span', { class: 'chip ' + riskClass(risk, thr) }, risk.toFixed(2));
 const actionChip = a => h('span', { class: 'chip ' + (a === 'blocked' ? 'bad' : a === 'would_block' ? 'warn' : '') }, a === 'would_block' ? 'would block' : a);
 const bar = (v, cls = '') => h('div', { class: 'bar ' + cls }, h('i', { style: `width:${Math.min(100, v * 100)}%` }));
-const empty = t => h('div', { class: 'empty' }, t);
+const empty = (t, title) => h('div', { class: 'empty' }, title ? h('b', {}, title) : null, t);
 const press = (el, fn) => { el.tabIndex = 0; el.addEventListener('keydown', ev => { if ((ev.key === 'Enter' || ev.key === ' ') && ev.target === el) { ev.preventDefault(); fn(); } }); return el; };
 const table = (cols, rows, onclick, none = 'Nothing here yet') => h('div', { class: 'wrap' }, h('table', {}, h('thead', {}, h('tr', {}, cols.map(c => h('th', {}, c)))),
-  h('tbody', {}, rows.length ? rows.map(r => { const tr = h('tr', { class: onclick ? 'click' : '', onclick: onclick && (() => onclick(r)) }, r.cells.map(c => h('td', {}, c))); return onclick ? press(tr, () => onclick(r)) : tr; }) : h('tr', {}, h('td', { colspan: cols.length }, empty(none))))));
+  h('tbody', {}, rows.length ? rows.map(r => { const tr = h('tr', { class: onclick ? 'click' : '', onclick: onclick && (() => onclick(r)) }, r.cells.map((c, i) => h('td', { 'data-label': cols[i] || '' }, c))); return onclick ? press(tr, () => onclick(r)) : tr; }) : h('tr', {}, h('td', { colspan: cols.length }, empty(none))))));
 function highlight(text, terms) {
   const t = [...new Set(terms.map(x => x.trim()).filter(x => x.length >= 2))].sort((a, b) => b.length - a.length);
   if (!t.length || !text) return [text || ''];
@@ -57,37 +40,6 @@ function highlight(text, terms) {
   if (last < text.length) out.push(text.slice(last));
   return out;
 }
-function timeline(points) {
-  const W = 800, H = 170, pad = 4, n = Math.max(points.length, 1), bw = W / n, max = Math.max(1, ...points.map(p => p.requests));
-  const s = svg('svg', { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', role: 'img', 'aria-label': 'Requests per minute' });
-  points.forEach((p, i) => {
-    const hh = (p.requests / max) * (H - pad), fh = (p.flagged / max) * (H - pad), x = i * bw + 1;
-    const r1 = svg('rect', { x, y: H - hh, width: Math.max(1, bw - 2), height: hh, rx: 2, fill: 'var(--fill)' });
-    const r2 = svg('rect', { x, y: H - fh, width: Math.max(1, bw - 2), height: fh, rx: 2, fill: 'var(--bad)' });
-    for (const r of [r1, r2]) r.append(svg('title', {})); r1.firstChild.textContent = `${clock(p.t)}: ${p.requests} requests, ${p.flagged} flagged`;
-    s.append(r1, r2);
-  });
-  return h('div', { class: 'timeline' }, s, h('div', { class: 'legend' }, h('span', {}, h('b', { style: 'background:var(--fill);border:1px solid var(--line)' }), 'Requests / min'), h('span', {}, h('b', { style: 'background:var(--bad)' }), 'Flagged')));
-}
-
-/* ---- drawer ------------------------------------------------------------------------------------- */
-let drawerOpen = false, drawerFrom = null;
-function openDrawer(title, body) {
-  $('drawerTitle').textContent = title; $('drawerBody').replaceChildren(body);
-  if (!drawerOpen) drawerFrom = document.activeElement;
-  $('drawer').inert = false; $('drawer').classList.add('open'); $('drawer').setAttribute('aria-hidden', 'false'); $('drawerScrim').hidden = false; drawerOpen = true;
-  $('drawerClose').focus();
-}
-function closeDrawer() {
-  const was = drawerOpen;
-  $('drawer').classList.remove('open'); $('drawer').setAttribute('aria-hidden', 'true'); $('drawer').inert = true; $('drawerScrim').hidden = true; drawerOpen = false;
-  if (was && drawerFrom && document.contains(drawerFrom)) drawerFrom.focus();
-  drawerFrom = null;
-}
-addEventListener('focusin', e => { if (drawerOpen && !$('dlg').open && !$('drawer').contains(e.target)) $('drawerClose').focus(); });
-$('drawerClose').onclick = $('drawerScrim').onclick = closeDrawer;
-addEventListener('keydown', e => { if (e.key === 'Escape' && drawerOpen) closeDrawer(); });
-
 async function openEvent(id, onChange) {
   const x = await act(() => api('/explain/' + id)), ev = x.event, thr = x.threshold, flagged = ev.action !== 'allowed';
   const terms = x.terms.filter(t => t.source === 'rules' || t.text.length >= 3).map(t => t.text).filter(Boolean);
@@ -96,11 +48,9 @@ async function openEvent(id, onChange) {
   const exemptForm = h('div', { class: 'stack', hidden: true });
   const top = detectors.sort((a, b) => b[1] - a[1])[0];
   const body = h('div', { class: 'stack' },
-    h('div', {}, h('div', { class: 'row' }, actionChip(ev.action), h('span', { class: 'muted' }, `${clock(ev.ts)} · ${ev.client_ip} · status ${ev.upstream_status} · ${ev.latency_ms.toFixed(1)} ms in engine`)),
-      h('div', { class: 'meter ' + (ev.risk >= thr ? 'flag' : '') }, h('i', { style: `width:${ev.risk * 100}%` }), h('u', { style: `left:${thr * 100}%`, title: 'threshold' })),
-      h('div', { class: 'row muted' }, h('span', {}, `Risk ${ev.risk.toFixed(2)}`), h('span', { class: 'grow' }), h('span', {}, `Threshold ${thr}`))),
-    h('div', {}, h('h3', {}, 'Why'), h('div', { class: 'stack', style: 'margin-top:8px' }, detectors.length ? detectors.map(([k, v]) => h('div', {}, h('div', { class: 'row' }, h('b', {}, k), h('span', { class: 'grow' }), h('span', { class: 'mono' }, v.toFixed(2))), bar(v, v >= .5 ? 'bad' : ''))) : h('span', { class: 'muted' }, 'No detector fired.')),
-      h('p', { class: 'muted' }, 'Each detector gives a strength between 0 and 1. They are combined as 1 − ∏(1 − strength), so one confident detector is enough and several doubtful ones add up.')),
+    h('div', { class: 'sec' }, h('div', { class: 'row' }, actionChip(ev.action), h('span', { class: 'muted' }, `${clock(ev.ts)} · ${ev.client_ip} · status ${ev.upstream_status} · ${ev.latency_ms.toFixed(1)} ms in engine`)), riskGauge(ev.risk, thr)),
+    h('div', { class: 'sec' }, h('h3', {}, 'Why'), detectors.length ? detectorBars(detectors) : h('span', { class: 'muted' }, 'No detector fired.'),
+      h('p', { class: 'muted' }, 'Each detector gives a strength between 0 and 1. They are combined as 1 − ∏(1 − strength), so one confident detector is enough and several doubtful ones add up. The tick on each bar is 0.5, where a detector alerts on its own.')),
     x.terms.length ? h('div', {}, h('h3', {}, 'Evidence'), h('div', { style: 'margin-top:8px' }, x.terms.map(t => h('span', { class: 'chip' }, t.source === 'rules' ? `${t.rule} · ${t.name}` : `ML n-gram “${t.text}” +${t.weight}`)))) : null,
     x.exempt.length ? h('div', { class: 'chip good' }, 'An exemption silenced: ' + x.exempt.map(r => r.detector).join(', ')) : null,
     h('div', {}, h('h3', {}, 'Request'), h('pre', { class: 'req', style: 'margin-top:8px' }, highlight(`${ev.method} ${ev.path}${ev.query ? '?' + ev.query : ''}`, terms), x.decoded.query ? ['\n\ndecoded: ', highlight(x.decoded.query, terms)] : '', x.decoded.body ? ['\n\nbody: ', highlight(x.decoded.body, terms)] : '', '\n\nuser-agent: ', highlight(ev.user_agent, terms))),
@@ -110,7 +60,7 @@ async function openEvent(id, onChange) {
       h('button', { class: 'btn primary', onclick: async () => { await act(() => api('/gw/feedback', { body: { event_id: id, verdict: 'benign' } }), 'Marked benign. See the Learning Inbox.'); fb.textContent = 'You marked this benign.'; onChange && onChange(); } }, 'Not an attack'),
       h('button', { class: 'btn', onclick: async () => { await act(() => api('/gw/feedback', { body: { event_id: id, verdict: 'attack' } }), 'Marked as a real attack'); fb.textContent = 'You marked this attack.'; onChange && onChange(); } }, 'Real attack'),
       h('button', { class: 'btn', onclick: () => { exemptForm.hidden = !exemptForm.hidden; } }, 'Exempt…'),
-      h('button', { class: 'btn danger', onclick: async () => { if (await ask('Ban ' + ev.client_ip + '?', 'Every request from this address will get 403 until you remove it under Policies.', 'Ban')) { await act(() => gw('/lists', { body: { ip: ev.client_ip, kind: 'deny', note: 'banned from event ' + id } }), 'Banned ' + ev.client_ip); onChange && onChange(); } } }, 'Ban IP')),
+      h('button', { class: 'btn danger', onclick: async () => { await act(() => gw('/lists', { body: { ip: ev.client_ip, kind: 'deny', note: 'banned from event ' + id } })); toast('Banned ' + ev.client_ip, { undo: () => act(() => gw('/lists/' + ev.client_ip.replace('/', '_'), { method: 'DELETE' }), 'Ban removed') }); onChange && onChange(); } }, icon('ban', 14), 'Ban IP')),
       fb, exemptForm));
   exemptFormFill(exemptForm, ev, top ? top[0] : 'rules');
   openDrawer(`${ev.method} ${ev.path}`, body);
@@ -131,7 +81,7 @@ function exemptFormFill(form, ev, detector) {
   form.append(h('p', { class: 'muted' }, 'Silence one detector for one path (and parameter). It is tested against stored traffic and known attacks before it is applied.'),
     h('div', { class: 'row' }, prefix, param, det), out,
     h('div', { class: 'row' }, h('button', { class: 'btn', onclick: async () => { const cur = (await gw('/exemptions')).exemptions; out.replaceChildren(simSummary(await act(() => api('/simulate', { body: { exemptions: [...cur, cand()] } })))); } }, 'Test'),
-      h('button', { class: 'btn primary', onclick: async () => { await act(() => api('/apply', { body: { exemptions: [cand()] } }), 'Exemption created'); form.hidden = true; } }, 'Create')));
+      h('button', { class: 'btn primary', onclick: async () => { const c = cand(); await act(() => api('/apply', { body: { exemptions: [c] } })); form.hidden = true; const made = (await gw('/exemptions')).exemptions.filter(e => e.prefix === c.prefix && (e.param || '') === (c.param || '') && e.detector === c.detector).sort((a, b) => b.id - a.id)[0]; toast('Exemption created', made ? { undo: () => act(() => gw('/exemptions/' + made.id, { method: 'DELETE' }), 'Exemption removed') } : {}); } }, 'Create')));
 }
 function simSummary(s) {
   const c = s.corpus, st = s.stored;
@@ -144,36 +94,70 @@ function simSummary(s) {
 
 /* ---- views -------------------------------------------------------------------------------------- */
 const views = {}; let cleanup = null, badge = 0;
-const NAV = [['overview', 'Overview'], ['events', 'Events'], ['inbox', 'Learning Inbox'], ['policies', 'Policies'], ['simulator', 'Simulator'], ['apisec', 'API Security'], ['threats', 'Threats'], ['alerts', 'Alerts'], ['settings', 'Settings'], ['evaluation', 'Evaluation']];
+/* [route, label, icon, go-to key] */
+const NAV = [['overview', 'Overview', 'overview', 'o'], ['events', 'Events', 'events', 'e'], ['inbox', 'Learning Inbox', 'inbox', 'i'], ['policies', 'Policies', 'policies', 'p'], ['simulator', 'Simulator', 'simulator', 's'], ['apisec', 'API Security', 'apisec', 'a'], ['threats', 'Threats', 'threats', 't'], ['alerts', 'Alerts', 'alerts', 'l'], ['settings', 'Settings', 'settings', ','], ['evaluation', 'Evaluation', 'evaluation', 'v']];
 
 views.overview = async root => {
-  let win = +(localStorage.win || 3600), live = true, lastId = 0, timer;
-  const kpis = h('div', { class: 'grid kpis' }), chart = h('div', { class: 'card' }), reasons = h('div', { class: 'card' }), paths = h('div', { class: 'card' }), sus = h('div', { class: 'card' }), feed = h('div', { class: 'feed' });
-  const modeBox = h('span', {}); const winSel = h('select', { 'aria-label': 'Time window', onchange: e => { win = +e.target.value; localStorage.win = win; load(); } }, [[900, 'Last 15 min'], [3600, 'Last hour'], [86400, 'Last 24 h'], [604800, 'Last 7 days']].map(([v, l]) => h('option', { value: v, selected: v === win }, l)));
-  const liveBtn = h('button', { class: 'btn sm', onclick: () => { live = !live; liveBtn.textContent = live ? 'Pause' : 'Resume'; } }, 'Pause');
+  let win = +(localStorage.win || 3600), live = true, lastId = 0, timer, mode = 'monitor';
+  const kp = {};
+  const kpis = h('div', { class: 'grid kpis' }, [['requests', 'Requests'], ['flagged', 'Flagged'], ['blocked', 'Blocked'], ['would', 'Would block'], ['latency', 'Added latency, p95'], ['risk', 'Mean risk']].map(([k, l]) => {
+    const n = h('b', { class: 'kpi-n' }, '–'), d = h('span', { class: 'delta' }), sp = h('span', { class: 'spark' }), el = h('div', { class: 'card kpi' }, h('span', { class: 'kpi-l' }, l), n, h('div', { class: 'kpi-foot' }, d, sp));
+    kp[k] = { el, n, d, sp }; return el;
+  }));
+  /* delta = change against the previous period of the same length; for "bad" counters, up is worse */
+  const setKpi = (k, value, fmt, { delta, bad, series, color } = {}) => {
+    const c = kp[k]; countTo(c.n, value, fmt);
+    if (delta == null || !isFinite(delta)) c.d.replaceChildren();
+    else { const up = delta > 0.0005, flat = Math.abs(delta) <= 0.0005; c.d.className = 'delta' + (flat ? '' : bad ? (up ? ' worse' : ' up') : ''); c.d.title = 'Compared with the previous ' + winLabel().toLowerCase(); c.d.replaceChildren(flat ? '' : icon(up ? 'up' : 'down', 12), flat ? 'No change' : Math.abs(delta * 100).toFixed(Math.abs(delta) < .1 ? 1 : 0) + '%'); }
+    const sp = series && series.length > 1 ? sparkline(series, color) : h('span', { class: 'spark' }); c.sp.replaceWith(sp); c.sp = sp;
+  };
+  const winLabel = () => ({ 900: '15 minutes', 3600: 'hour', 86400: '24 hours', 604800: '7 days' }[win]);
+  const chart = h('div', { class: 'card' }), reasons = h('div', { class: 'card' }), paths = h('div', { class: 'card' }), sus = h('div', { class: 'card' }), feed = h('div', { class: 'feed' }), guide = h('div', { class: 'card', hidden: true });
+  const winSeg = segmented([[900, '15 min'], [3600, '1 hour'], [86400, '24 hours'], [604800, '7 days']], win, v => { win = +v; localStorage.win = win; load(); }, 'Time window');
+  const modeSeg = segmented([['monitor', 'Monitor'], ['block', 'Block']], mode, v => setMode(v), 'Mode');
+  const liveEl = h('span', { class: 'live' }, h('i'), 'Live'), liveBtn = h('button', { class: 'btn sm', onclick: () => { live = !live; liveEl.classList.toggle('paused', !live); liveEl.lastChild.textContent = live ? 'Live' : 'Paused'; liveBtn.replaceChildren(icon(live ? 'pause' : 'play', 12), live ? 'Pause' : 'Resume'); } }, icon('pause', 12), 'Pause');
+  const cmd = text => h('div', { class: 'cmd' }, h('code', {}, text), h('button', { class: 'icon-btn', style: 'width:28px;height:28px', 'aria-label': 'Copy command', onclick: () => navigator.clipboard?.writeText(text).then(() => toast('Copied')) }, icon('copy', 14)));
+  guide.append(h('h2', {}, 'Welcome. Let’s send some traffic'), h('div', { class: 'guide', style: 'margin-top:16px' },
+    h('div', { class: 'step done' }, h('span', { class: 'step-n' }, icon('check', 14)), h('div', {}, h('b', {}, 'The gateway is running'), h('div', { class: 'muted' }, 'This console is connected to it. Nothing has passed through it yet.'))),
+    h('div', { class: 'step' }, h('span', { class: 'step-n' }, '2'), h('div', {}, h('b', {}, 'Send requests through port 8080'), h('div', { class: 'muted' }, 'Point your app or DNS at the gateway, or replay the demo dataset at a realistic pace:'), cmd('python -m traffic.replay --url http://127.0.0.1:8080 --rate 5'))),
+    h('div', { class: 'step' }, h('span', { class: 'step-n' }, '3'), h('div', {}, h('b', {}, 'Watch it appear here'), h('div', { class: 'muted' }, 'This page updates by itself. Open any event to see why it was flagged.')))));
   async function load() {
-    const o = await api('/overview?since=' + win), s = o.stats, ba = s.by_action, flagged = (ba.blocked || 0) + (ba.would_block || 0);
-    kpis.replaceChildren(...[['Requests', s.total], ['Flagged', s.total ? pct(flagged / s.total) : '0%'], ['Blocked', ba.blocked || 0], ['Would block', ba.would_block || 0], ['Added latency p95', (+s.latency_ms.p95).toFixed(1) + ' ms'], ['Mean risk', s.avg_risk]].map(([k, v]) => h('div', { class: 'card kpi' }, h('b', {}, v), h('span', {}, k))));
-    modeBox.replaceChildren(h('div', { class: 'seg', role: 'group', 'aria-label': 'Mode' }, ['monitor', 'block'].map(m => h('button', { 'aria-pressed': s.mode === m, onclick: () => setMode(m, s) }, m === 'monitor' ? 'Monitor' : 'Block'))));
-    chart.replaceChildren(h('h2', {}, 'Traffic'), s.timeline.length ? timeline(s.timeline) : empty('No traffic in this window. Send some through the gateway.'));
-    reasons.replaceChildren(h('h2', {}, 'Top reasons'), o.top_reasons.length ? h('div', { class: 'stack' }, o.top_reasons.map(([k, n]) => h('div', {}, h('div', { class: 'row' }, h('span', {}, k), h('span', { class: 'grow' }), h('b', {}, n)), bar(n / o.top_reasons[0][1])))) : empty('No flagged requests'));
-    paths.replaceChildren(h('h2', {}, 'Most flagged paths'), table(['Path', 'Requests', 'Flagged'], s.top_paths.map(p => ({ cells: [h('span', { class: 'mono' }, p.path), p.requests, p.flagged || 0] }))));
-    sus.replaceChildren(h('h2', {}, 'Possible false positives'), o.suspects.length ? h('div', { class: 'stack' }, o.suspects.map(x => h('div', { class: 'row' }, h('div', { class: 'grow' }, h('span', { class: 'mono' }, x.path), h('div', { class: 'muted' }, `${x.count} flags from ${x.ips} clients, only “${x.detector}” fired, mean risk ${x.avg_risk}`)), h('button', { class: 'btn sm', onclick: () => openEvent(x.example, load) }, 'Inspect')))) : h('p', { class: 'muted' }, 'Nothing suspicious. Flags that come from a single detector on many clients show up here.'));
+    const [o, o2] = await Promise.all([api('/overview?since=' + win), api('/overview?since=' + win * 2)]);
+    const s = o.stats, cnt = st => ({ n: st.total, f: (st.by_action.blocked || 0) + (st.by_action.would_block || 0), b: st.by_action.blocked || 0, w: st.by_action.would_block || 0 });
+    const c = cnt(s), a = cnt(o2.stats), p = { n: a.n - c.n, f: a.f - c.f, b: a.b - c.b, w: a.w - c.w }, rel = (x, y) => y > 0 ? (x - y) / y : null;
+    const pts = bucketize(s.timeline, 24), req = pts.map(x => x.requests), flg = pts.map(x => x.flagged);
+    mode = s.mode; modeSeg.set(mode); guide.hidden = s.total > 0;
+    setKpi('requests', c.n, v => Math.round(v).toLocaleString(), { delta: rel(c.n, p.n), series: req });
+    setKpi('flagged', c.n ? c.f / c.n * 100 : 0, v => v.toFixed(1) + '%', { delta: p.n ? (c.n ? c.f / c.n : 0) - p.f / p.n : null, bad: true, series: flg, color: 'var(--bad)' });
+    setKpi('blocked', c.b, v => Math.round(v).toLocaleString(), { delta: rel(c.b, p.b), bad: true, series: flg, color: 'var(--bad)' });
+    setKpi('would', c.w, v => Math.round(v).toLocaleString(), { delta: rel(c.w, p.w), bad: true, series: flg, color: 'var(--warn)' });
+    setKpi('latency', +s.latency_ms.p95, v => v.toFixed(1) + ' ms');
+    const prevRisk = p.n > 0 ? (o2.stats.avg_risk * a.n - s.avg_risk * c.n) / p.n : null;
+    setKpi('risk', +s.avg_risk, v => v.toFixed(3), { delta: prevRisk ? rel(+s.avg_risk, prevRisk) : null, bad: true });
+    chart.replaceChildren(h('div', { class: 'card-head' }, h('h2', {}, 'Traffic'), h('span', { class: 'muted' }, 'requests and flagged requests per minute')), h('div', { style: 'position:relative;margin-top:36px' }, areaChart(s.timeline, { height: 220 })));
+    reasons.replaceChildren(h('h2', {}, 'Top reasons'), o.top_reasons.length ? h('div', { class: 'stack' }, o.top_reasons.map(([k, n]) => h('div', {}, h('div', { class: 'row' }, h('span', {}, k), h('span', { class: 'grow' }), h('b', { class: 'num' }, n)), bar(n / o.top_reasons[0][1])))) : empty('Flagged requests and the reasons behind them show up here.', 'Nothing flagged'));
+    paths.replaceChildren(h('h2', {}, 'Most flagged paths'), table(['Path', 'Requests', 'Flagged'], s.top_paths.map(x => ({ cells: [h('span', { class: 'mono' }, x.path), h('span', { class: 'num' }, x.requests), h('span', { class: 'num' }, x.flagged || 0)] })), null, 'No traffic in this window.'));
+    sus.replaceChildren(h('h2', {}, 'Possible false positives'), o.suspects.length ? h('div', { class: 'stack' }, o.suspects.map(x => h('div', { class: 'row' }, h('div', { class: 'grow' }, h('span', { class: 'mono' }, x.path), h('div', { class: 'muted' }, `${x.count} flags from ${x.ips} clients, only “${x.detector}” fired, mean risk ${x.avg_risk}`)), h('button', { class: 'btn sm', onclick: () => openEvent(x.example, load) }, 'Inspect')))) : empty('Flags that come from a single detector on many clients show up here.', 'Nothing suspicious'));
   }
-  async function setMode(m, s) {
-    if (m === s.mode) return;
-    if (m === 'block' && !await ask('Switch to Block mode?', `Attacks will get a 403 and never reach your application. In the last hour ${s.by_action.would_block || 0} request(s) would have been blocked. Check the Learning Inbox for false positives first.`, 'Block')) return;
-    await act(() => gw('/mode', { body: { mode: m } }), 'Mode: ' + m); load();
+  async function setMode(m) {
+    if (m === mode) return;
+    if (m === 'block') {
+      const would = (await api('/overview?since=3600')).stats.by_action.would_block || 0;
+      if (!await ask('Switch to Block mode?', `Attacks will get a 403 and never reach your application. In the last hour ${would} request(s) would have been blocked. Check the Learning Inbox for false positives first.`, 'Block')) { modeSeg.set(mode); return; }
+    }
+    try { await act(() => gw('/mode', { body: { mode: m } }), 'Mode: ' + m); mode = m; } catch { modeSeg.set(mode); }
+    load();
   }
   async function poll() {
     if (!live || document.hidden) return;
     const evs = (await gw('/events?limit=15')).events, fresh = evs.filter(e => e.id > lastId);
     if (!fresh.length) return;
-    for (const e of fresh.reverse()) feed.prepend(feedRow(e));
+    const first = lastId === 0;
+    for (const e of fresh.reverse()) { const r = feedRow(e); feed.prepend(r); if (!first) springIn(r, -8); }
     lastId = Math.max(lastId, ...evs.map(e => e.id)); while (feed.children.length > 30) feed.lastChild.remove();
   }
-  const feedRow = e => press(h('div', { class: 'click', role: 'button', style: 'cursor:pointer', onclick: () => openEvent(e.id, load) }, riskChip(e.risk, .5), h('span', { class: 'mono', style: 'word-break:break-all' }, `${e.method} ${e.path}${e.query ? '?' + e.query.slice(0, 80) : ''}`), h('span', { class: 'muted' }, actionChip(e.action))), () => openEvent(e.id, load));
-  root.append(h('div', { class: 'stack page' }, h('div', { class: 'row' }, winSel, modeBox, h('span', { class: 'grow' }), h('span', { class: 'badge-live' }, h('i'), 'Live'), liveBtn), kpis, chart,
+  const feedRow = e => press(h('div', { role: 'button', onclick: () => openEvent(e.id, load) }, riskChip(e.risk, .5), h('span', { class: 'mono' }, `${e.method} ${e.path}${e.query ? '?' + e.query.slice(0, 80) : ''}`), actionChip(e.action)), () => openEvent(e.id, load));
+  root.append(h('div', { class: 'stack page', style: 'gap:16px' }, h('div', { class: 'row' }, winSeg, modeSeg, h('span', { class: 'grow' }), liveEl, liveBtn), guide, kpis, chart,
     h('div', { class: 'grid g2' }, reasons, sus), h('div', { class: 'grid g2' }, paths, h('div', { class: 'card' }, h('h2', {}, 'Live feed'), feed))));
   await load(); await poll();
   if (!root.isConnected) return;                          // the user already navigated elsewhere
@@ -189,7 +173,13 @@ views.events = async root => {
     thr = (await gw('/mode')).threshold; const before = append && rows.length ? '&before_id=' + rows[rows.length - 1].id : '';
     const got = (await gw('/events' + q() + before)).events; rows = append ? rows.concat(got) : got; draw(got.length === 50);
   }
-  const draw = hasMore => list.replaceChildren(table(['Time', 'Risk', 'Action', 'Request', 'Client', 'Why'], rows.map(e => ({ id: e.id, cells: [h('span', { class: 'muted nw' }, clock(e.ts)), riskChip(e.risk, thr), actionChip(e.action), h('span', { class: 'mono' }, `${e.method} ${e.path}${e.query ? '?' + e.query.slice(0, 70) : ''}`), h('span', { class: 'mono' }, e.client_ip), Object.keys(e.detectors).filter(d => e.detectors[d] > 0).map(d => h('span', { class: 'chip' }, d))] })), r => openEvent(r.id, () => load()), 'No events match. Send traffic through the gateway (or run: python -m traffic.replay), or relax the filters.'), hasMore ? h('div', { class: 'row end', style: 'margin-top:12px' }, more) : null);
+  const phone = matchMedia('(max-width:700px)'); let more_ = false;
+  const evRow = e => { const open = () => openEvent(e.id, () => load()); return press(h('div', { class: 'ev', role: 'button', onclick: open },
+    h('div', { class: 'row', style: 'gap:6px' }, riskChip(e.risk, thr), actionChip(e.action), h('span', { class: 'grow' }), h('span', { class: 'muted nw' }, clock(e.ts))),
+    h('div', { class: 'mono ev-req' }, `${e.method} ${e.path}${e.query ? '?' + e.query.slice(0, 70) : ''}`),
+    h('div', { class: 'muted' }, e.client_ip, ' · ', Object.keys(e.detectors).filter(d => e.detectors[d] > 0).join(', ') || 'no detector')), open); };
+  const draw = hasMore => { more_ = hasMore; list.replaceChildren(phone.matches ? (rows.length ? h('div', { class: 'ev-list' }, rows.map(evRow)) : empty('Send traffic through the gateway, or relax the filters.', 'No events match')) : table(['Time', 'Risk', 'Action', 'Request', 'Client', 'Why'], rows.map(e => ({ id: e.id, cells: [h('span', { class: 'muted nw' }, clock(e.ts)), riskChip(e.risk, thr), actionChip(e.action), h('span', { class: 'mono' }, `${e.method} ${e.path}${e.query ? '?' + e.query.slice(0, 70) : ''}`), h('span', { class: 'mono' }, e.client_ip), Object.keys(e.detectors).filter(d => e.detectors[d] > 0).map(d => h('span', { class: 'chip' }, d))] })), r => openEvent(r.id, () => load()), 'No events match. Send traffic through the gateway (or run: python -m traffic.replay), or relax the filters.'), hasMore ? h('div', { class: 'row end', style: 'margin-top:12px' }, more) : null); };
+  phone.addEventListener('change', () => root.isConnected && draw(more_));
   const ctl = (el, key) => { el.addEventListener('input', () => { f[key] = el.value; clearTimeout(ctl.t); ctl.t = setTimeout(() => load().catch(e => toast(e.message)), 250); }); return el; };
   root.append(h('div', { class: 'stack page' }, h('div', { class: 'row' },
     ctl(h('select', { 'aria-label': 'Action' }, [['', 'All actions'], ['allowed', 'Allowed'], ['blocked', 'Blocked'], ['would_block', 'Would block']].map(([v, l]) => h('option', { value: v }, l))), 'action'),
@@ -223,7 +213,7 @@ views.policies = async root => {
   const val = h('b', {}, thr.toFixed(2)); let t;
   const range = h('input', { type: 'range', min: .1, max: .95, step: .05, value: thr, 'aria-label': 'Threshold', oninput: e => { thr = +e.target.value; val.textContent = thr.toFixed(2); clearTimeout(t); t = setTimeout(run, 200); } });
   async function run() { const s = await api('/simulate', { body: { threshold: thr, exemptions: ex.exemptions } }), st = s.stored; preview.replaceChildren(h('div', { class: 'stack' }, h('div', { class: 'row' }, h('span', { class: 'chip' }, `${st.flagged_before} → ${st.flagged_after} flagged of ${st.events} stored events`), h('span', { class: 'chip ' + (s.corpus.attacks_caught_after < s.corpus.attacks_caught_before ? 'bad' : 'good') }, `known attacks caught ${s.corpus.attacks_caught_after}/${s.corpus.attacks}`), h('span', { class: 'chip' }, `look-alike false alarms ${s.corpus.false_alarms_after}`)), s.safe ? null : h('div', { class: 'chip bad', style: 'white-space:normal' }, s.blocked_because.join('; ')))); return s; }
-  const seg = h('div', { class: 'seg' }, ['monitor', 'block'].map(x => h('button', { 'aria-pressed': m === x, onclick: e => { m = x; [...seg.children].forEach(b => b.setAttribute('aria-pressed', b === e.target)); } }, x === 'monitor' ? 'Monitor (log only)' : 'Block')));
+  const seg = segmented([['monitor', 'Monitor (log only)'], ['block', 'Block']], m, v => { m = v; }, 'Mode');
   const apply = h('button', { class: 'btn primary', onclick: async () => {
     if (m === 'block' && mode.mode !== 'block' && !await ask('Switch to Block mode?', 'Attacks will get a 403. Make sure the Learning Inbox is clear.', 'Block')) return;
     if (thr !== mode.threshold) await act(() => api('/apply', { body: { threshold: thr } })); if (m !== mode.mode) await act(() => gw('/mode', { body: { mode: m } })); toast('Policy saved'); render(); } }, 'Apply');
@@ -252,11 +242,11 @@ views.simulator = async root => {
     last = await act(() => api('/simulate', { body: { threshold: thr, exemptions: [...cur.exemptions, ...cands] } }));
     const s = last.stored, c = last.corpus;
     out.replaceChildren(h('div', { class: 'grid g2' },
-      h('div', { class: 'card stack' }, h('h2', {}, 'Stored traffic'), h('div', { class: 'row' }, h('span', { class: 'kpi' }, h('b', {}, `${s.flagged_before} → ${s.flagged_after}`), h('span', {}, `flagged of ${s.events} events`))),
+      h('div', { class: 'card stack' }, h('h2', {}, 'Stored traffic'), h('div', { class: 'row' }, h('span', { class: 'stat' }, h('b', { class: 'kpi-n' }, `${s.flagged_before} → ${s.flagged_after}`), h('span', {}, `flagged of ${s.events} events`))),
         h('div', { class: 'row' }, h('span', { class: 'chip' }, `${s.newly_allowed} newly allowed`), h('span', { class: 'chip' }, `${s.newly_flagged} newly flagged`)),
         s.allowed_sample.length ? table(['Newly allowed', 'Risk'], s.allowed_sample.map(e => ({ id: e.id, cells: [h('span', { class: 'mono' }, `${e.method} ${e.path}?${e.query.slice(0, 50)}`), e.risk.toFixed(2)] })), r => openEvent(r.id)) : null),
       h('div', { class: 'card stack' }, h('h2', {}, 'Regression corpus (known attacks and look-alikes)'),
-        h('div', { class: 'row' }, h('span', { class: 'kpi' }, h('b', {}, `${c.attacks_caught_before} → ${c.attacks_caught_after}`), h('span', {}, `of ${c.attacks} attacks caught`)), h('span', { class: 'kpi' }, h('b', {}, `${c.false_alarms_before} → ${c.false_alarms_after}`), h('span', {}, `false alarms on ${c.benign} look-alikes`))),
+        h('div', { class: 'row' }, h('span', { class: 'stat' }, h('b', { class: 'kpi-n' }, `${c.attacks_caught_before} → ${c.attacks_caught_after}`), h('span', {}, `of ${c.attacks} attacks caught`)), h('span', { class: 'stat' }, h('b', { class: 'kpi-n' }, `${c.false_alarms_before} → ${c.false_alarms_after}`), h('span', {}, `false alarms on ${c.benign} look-alikes`))),
         c.attacks_lost.length ? h('div', { class: 'stack' }, h('span', { class: 'chip bad' }, 'Attacks that would get through'), c.attacks_lost.slice(0, 5).map(a => h('pre', { class: 'req' }, a.text))) : h('span', { class: 'chip good' }, 'No known attack lost'))),
       h('div', { class: 'row' }, last.safe ? h('span', { class: 'chip good' }, 'Safe to apply') : h('span', { class: 'chip bad', style: 'white-space:normal' }, 'Cannot apply: ' + last.blocked_because.join('; ')),
         h('span', { class: 'grow' }), h('button', { class: 'btn primary', disabled: !last.safe || (!cands.length && thr === mode.threshold), onclick: async () => { await act(() => api('/apply', { body: { threshold: thr, exemptions: cands } }), 'Applied'); render(); } }, 'Apply candidate')));
@@ -273,7 +263,7 @@ views.threats = async root => {
     const w = 520, hgt = 70, s = svg('svg', { viewBox: `0 0 ${w} ${hgt}`, style: 'width:100%;height:70px' });
     evs.forEach((e, i) => { const c = svg('circle', { cx: 6 + i * (w - 12) / Math.max(evs.length - 1, 1), cy: hgt - 6 - e.risk * (hgt - 12), r: 3.5, fill: e.risk >= thr ? 'var(--bad)' : 'var(--mute)' }); s.append(c); });
     const denied = (await gw('/lists')).lists.some(l => l.ip === ip && l.kind === 'deny');
-    openDrawer(ip, h('div', { class: 'stack' }, h('div', { class: 'row' }, h('span', { class: 'chip' }, `${evs.length} recent requests`), denied ? h('span', { class: 'chip bad' }, 'banned') : h('button', { class: 'btn danger', onclick: async () => { if (await ask('Ban ' + ip + '?', 'All requests from this address will get 403.', 'Ban')) { await act(() => gw('/lists', { body: { ip, kind: 'deny', note: 'banned from Threats' } }), 'Banned'); closeDrawer(); render(); } } }, 'Ban IP')),
+    openDrawer(ip, h('div', { class: 'stack' }, h('div', { class: 'row' }, h('span', { class: 'chip' }, `${evs.length} recent requests`), denied ? h('span', { class: 'chip bad' }, 'banned') : h('button', { class: 'btn danger', onclick: async () => { await act(() => gw('/lists', { body: { ip, kind: 'deny', note: 'banned from Threats' } })); closeDrawer(); toast('Banned ' + ip, { undo: async () => { await act(() => gw('/lists/' + ip.replace('/', '_'), { method: 'DELETE' }), 'Ban removed'); render(); } }); render(); } }, icon('ban', 14), 'Ban IP')),
       h('div', {}, h('h3', {}, 'Risk over time'), s), h('div', {}, h('h3', {}, 'Story'), evs.slice(-40).reverse().map(e => press(h('div', { class: 'row', role: 'button', style: 'padding:5px 0;border-top:1px solid var(--line);cursor:pointer', onclick: () => openEvent(e.id) }, riskChip(e.risk, thr), h('span', { class: 'muted' }, clock(e.ts)), h('span', { class: 'mono grow', style: 'word-break:break-all' }, `${e.method} ${e.path}`), actionChip(e.action)), () => openEvent(e.id))))));
   };
   root.append(h('div', { class: 'card page' }, h('h2', {}, 'Clients by risk (last 24 h)'), table(['Client', 'Requests', 'Flagged', 'Max risk', 'Main signals', 'Last seen', ''], rows.map(r => ({ ip: r.ip, cells: [h('span', { class: 'mono' }, r.ip), r.requests, r.flagged, h('b', {}, r.max_risk.toFixed(2)), r.top.map(([d, n]) => h('span', { class: 'chip' }, `${d} ×${n}`)), h('span', { class: 'muted' }, ago(r.last_ts)), r.denied ? h('span', { class: 'chip bad' }, 'banned') : ''] })), r => timelineOf(r.ip), 'No clients yet. They appear as soon as traffic goes through the gateway.')));
@@ -325,7 +315,7 @@ views.evaluation = async root => {
 };
 
 /* ---- shell: router, login, boot ----------------------------------------------------------------- */
-function setBadge(n) { badge = n; const a = document.querySelector('nav a[href="#/inbox"]'); if (!a) return; a.querySelector('.n')?.remove(); if (n) a.append(h('span', { class: 'n' }, n)); }
+function setBadge(n) { badge = n; document.querySelectorAll('[data-k="inbox"]').forEach(a => { a.querySelector('.n')?.remove(); if (n) a.append(h('span', { class: 'n' }, n)); }); }
 const skeleton = () => h('div', { class: 'stack', 'aria-hidden': 'true' }, h('div', { class: 'sk', style: 'height:40px;width:55%' }), h('div', { class: 'grid kpis' }, [0, 1, 2, 3].map(() => h('div', { class: 'sk', style: 'height:84px' }))), h('div', { class: 'sk', style: 'height:220px' }), h('div', { class: 'grid g2' }, h('div', { class: 'sk', style: 'height:160px' }), h('div', { class: 'sk', style: 'height:160px' })));
 function errorCard(e) {
   const down = [502, 503, 504].includes(e.status), offline = e instanceof TypeError;
@@ -338,8 +328,7 @@ let renderId = 0, viewFailed = false, gwOk = true;
 async function render() {
   cleanup && cleanup(); cleanup = null;
   const name = (location.hash.match(/^#\/(\w+)/) || [])[1]; const key = views[name] ? name : 'overview';
-  document.querySelectorAll('nav a').forEach(a => { if (a.dataset.k === key) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
-  document.querySelector('nav a[aria-current]')?.scrollIntoView({ inline: 'center', block: 'nearest' });   // phone: keep the current section visible in the scrolling bar
+  document.querySelectorAll('[data-k]').forEach(a => { if (a.dataset.k === key) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
   $('title').textContent = NAV.find(n => n[0] === key)[1]; document.title = NAV.find(n => n[0] === key)[1] + ' · Aegis';
   const view = $('view'), root = h('div', { hidden: true }), mine = ++renderId;
   view.replaceChildren(root); view.setAttribute('aria-busy', 'true'); closeDrawer();
@@ -347,7 +336,7 @@ async function render() {
   try { await views[key](root); viewFailed = false; }
   catch (e) { if (e.message !== 'login required') { root.replaceChildren(errorCard(e)); viewFailed = true; } }
   clearTimeout(late); skel.remove();
-  if (mine === renderId) { root.hidden = false; view.removeAttribute('aria-busy'); }
+  if (mine === renderId) { root.hidden = false; springIn(root, 12); view.removeAttribute('aria-busy'); }
 }
 function setGateway(ok, consoleDown = false) {
   $('gwDot').className = 'dot ' + (ok ? 'ok' : 'bad'); $('gwText').textContent = ok ? 'Gateway connected' : consoleDown ? 'Console offline' : 'Gateway unreachable';
@@ -362,13 +351,39 @@ setInterval(async () => {
 }, 8000);
 function showLogin() { $('app').hidden = true; $('login').hidden = false; $('pw').focus(); }
 $('loginForm').onsubmit = async e => { e.preventDefault(); try { await api('/login', { body: { password: $('pw').value } }); $('login').hidden = true; boot(); } catch (x) { $('loginErr').textContent = x.message; } };
+let authRequired = false;
+const paintTheme = () => { const t = Theme.get(), dark = t === 'dark' || (t === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches); $('themeBtn').replaceChildren(icon(dark ? 'moon' : 'sun', 16)); $('themeBtn').title = 'Theme: ' + t; };
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', paintTheme);
+const signOut = async () => { await api('/logout', { method: 'POST' }); location.reload(); };
+function moreSheet() {
+  const go = k => { closeDrawer(); setTimeout(() => { location.hash = '#/' + k; }, 200); };
+  openDrawer('More', h('div', { class: 'more-list' }, NAV.slice(4).map(([k, l, ic]) => h('a', { href: '#/' + k, onclick: e => { e.preventDefault(); go(k); } }, icon(ic, 20), l)),
+    h('button', { onclick: () => { Theme.cycle(); paintTheme(); } }, icon('sun', 20), 'Change theme'), authRequired ? h('button', { onclick: signOut }, icon('logout', 20), 'Sign out') : null));
+}
+async function setModeFromPalette(m) {
+  if (m === 'block' && !await ask('Switch to Block mode?', 'Attacks will get a 403 and never reach your application. Check the Learning Inbox for false positives first.', 'Block')) return;
+  await act(() => gw('/mode', { body: { mode: m } }), 'Mode: ' + m); render();
+}
+ui.commands = () => [
+  ...NAV.map(([k, l, ic, key]) => ({ group: 'Go to', label: l, icon: ic, key, run: () => { location.hash = '#/' + k; } })),
+  { group: 'Action', label: 'Switch to Monitor mode', hint: 'Log only, nothing is blocked', icon: 'shield', run: () => setModeFromPalette('monitor') },
+  { group: 'Action', label: 'Switch to Block mode', hint: 'Attacks get a 403', icon: 'ban', run: () => setModeFromPalette('block') },
+  { group: 'Action', label: 'Reload models', hint: 'Pick up retrained models and schema', icon: 'settings', run: async () => { const r = await act(() => gw('/reload', { method: 'POST' })); toast(r.reloaded.length ? 'Loaded: ' + r.reloaded.join(', ') : 'Everything is up to date'); } },
+  { group: 'Action', label: 'Change theme', hint: 'Automatic, light or dark', icon: 'sun', run: () => { Theme.cycle(); paintTheme(); } },
+  { group: 'Help', label: 'Keyboard shortcuts', hint: 'Press ?', icon: 'search', run: shortcutSheet },
+];
+addEventListener('scroll', () => document.body.classList.toggle('scrolled', scrollY > 4), { passive: true });
 async function boot() {
   const s = await fetch('/api/session').then(r => r.json());
   if (!s.logged_in) return showLogin();
-  $('login').hidden = true; $('app').hidden = false;
-  $('nav').replaceChildren(...NAV.map(([k, l]) => h('a', { href: '#/' + k, 'data-k': k }, l)));
+  authRequired = !!s.auth_required; $('login').hidden = true; $('app').hidden = false;
+  $('nav').replaceChildren(...NAV.map(([k, l, ic]) => h('a', { href: '#/' + k, 'data-k': k, title: l }, icon(ic, 18), h('span', {}, l))));
+  $('tabbar').replaceChildren(...NAV.slice(0, 4).map(([k, l, ic]) => h('a', { href: '#/' + k, 'data-k': k }, icon(ic, 22), h('span', {}, l.replace('Learning ', '')))), h('button', { 'aria-label': 'More sections', onclick: moreSheet }, icon('more', 22), h('span', {}, 'More')));
+  $('drawerClose').replaceChildren(icon('close', 16)); $('palIcon').replaceChildren(icon('search', 15));
+  $('palBtn').onclick = () => Palette.show(); $('themeBtn').onclick = () => { Theme.cycle(); paintTheme(); }; paintTheme();
+  if (/Mac|iPhone|iPad/.test(navigator.platform)) $('palBtn').querySelector('kbd').textContent = '⌘K'; else $('palBtn').querySelector('kbd').textContent = 'Ctrl K';
   setGateway(s.gateway_ok);
-  if (s.auth_required) $('topRight').replaceChildren(h('button', { class: 'btn sm', onclick: async () => { await api('/logout', { method: 'POST' }); location.reload(); } }, 'Sign out'));
+  if (s.auth_required) $('topRight').replaceChildren(h('button', { class: 'icon-btn', 'aria-label': 'Sign out', title: 'Sign out', onclick: signOut }, icon('logout', 16)));
   render(); api('/inbox').then(i => setBadge(i.items.length)).catch(() => {});
 }
 addEventListener('hashchange', render); boot();
