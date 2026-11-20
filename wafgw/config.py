@@ -5,7 +5,8 @@ from pathlib import Path
 
 DEFAULTS = {
     "proxy": {"listen": "0.0.0.0:8080", "upstream": "http://127.0.0.1:8000", "max_body_bytes": 1048576,
-              "inspect_bytes": 65536, "upstream_timeout_s": 30, "trust_forwarded": False},
+              "inspect_bytes": 65536, "upstream_timeout_s": 30, "body_timeout_s": 30, "trust_forwarded": False},
+    "tls": {"cert": "", "key": ""},
     "engine": {"mode": "monitor", "threshold": 0.5, "on_error": "fail_open"},
     "admin": {"listen": "127.0.0.1:9000"},
     "rate_limit": {"enabled": False, "rate_per_s": 20, "burst": 40},
@@ -26,4 +27,6 @@ def load(path: str | None = None) -> dict:
                                ("WAFGW_DB", "store", "path"), ("WAFGW_ADMIN_LISTEN", "admin", "listen")]:
         if env.get(key):
             cfg[section][name] = env[key]
+    if env.get("WAFGW_TRUST_FORWARDED"):                       # demo replays send the client IP in X-Forwarded-For
+        cfg["proxy"]["trust_forwarded"] = env["WAFGW_TRUST_FORWARDED"].lower() in ("1", "true", "yes")
     return cfg

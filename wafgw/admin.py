@@ -35,7 +35,7 @@ def build_admin(engine, store, token: str | None) -> Starlette:
     async def health(request):
         return JSONResponse({"status": "ok", "uptime_s": round(time.time() - START),
                              "models": {"payload": engine.payload is not None, "behavior": engine.behavior is not None,
-                                    "schema": engine.schema is not None}})
+                                    "schema": engine.schema is not None}, "reload_errors": engine.reload_errors})
 
     async def stats(request):
         return JSONResponse({**store.stats(int(request.query_params.get("since", 3600))),
@@ -130,6 +130,9 @@ def build_admin(engine, store, token: str | None) -> Starlette:
             store.put("alerts", d.get("alerts", {}))
         return JSONResponse(policy_doc())
 
+    async def reload(request):
+        return JSONResponse(engine.reload())
+
     async def schema(request):
         """Learned/declared API schema plus how often each kind of schema finding fired in the last 24 h."""
         kinds = Counter()
@@ -141,6 +144,7 @@ def build_admin(engine, store, token: str | None) -> Starlette:
                              "endpoints": engine.schema.summary() if engine.schema else []})
 
     return Starlette(routes=[
+        Route("/api/reload", guarded(reload), methods=["POST"]),
         Route("/api/schema", guarded(schema)),
         Route("/api/events/{id:int}", guarded(one_event)),
         Route("/api/feedback", guarded(feedback), methods=["GET", "POST"]),

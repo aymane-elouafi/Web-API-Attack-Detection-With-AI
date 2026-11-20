@@ -1,69 +1,61 @@
 # Web API Attack Detection
 
-AI-assisted detection of attacks against a web API: classic rules + machine learning,
-combined into one risk score. (AI module project.)
+A web application firewall (WAF) you can put in front of a web API, built around one idea: **no single
+detector is enough, so several are fused into one explainable risk score.** Own signature rules and
+OWASP CRS (via Coraza) catch known payloads, a payload classifier and a behavior model (both machine
+learning) catch disguised and behavioral attacks, and an API schema detector catches structural
+anomalies. The result runs as a reverse proxy (`wafgw/`) with a management console (`dashboard/`).
+(AI module project.)
 
-## Roadmap
-
-1. **Foundation** (done): vulnerable demo API + labeled traffic generator
-2. **Rules-based detector** (done): our own WAF-style rules, plus **Coraza + OWASP CRS** as the industry baseline (done)
-3. AI: supervised payload classifier (done); unsupervised behavior model (done, see below)
-4. Score fusion + evaluation (rules vs AI vs hybrid)
-5. Management interface (console) -- done, see below
-6. **Real reverse-proxy WAF gateway** (`wafgw/`) and training on real datasets -- done, see below
-
-## Layout
+## Architecture
 
 ```
-common/seed.py        shared seed data (users, products, orders)
-target_api/app.py     intentionally vulnerable FastAPI app (local only, fake data)
-traffic/payloads.py   attack payload catalogue (with evasion variants)
-traffic/generate.py   simulates users + attackers, writes data/dataset.csv
-detection/rules.py    rules detector: signature rules + rate/login-failure rules, CRS-style scoring
-detection/metrics.py  precision / recall / false-positive rate, shared by all detectors
-detection/run_rules.py  runs the rules on the dataset and prints a report
-detection/run_waf.py  evaluates Coraza+CRS and compares it with our rules
-detection/report.py   report printing shared by all detectors
-detection/ml_payload.py  supervised payload classifier (features + model + grouped cross-validation)
-detection/run_ml.py   evaluates it and compares it with the rules and Coraza
-wafgw/                reverse-proxy WAF gateway (rules + 2 AI models + fusion, block/monitor, event log, admin API)
-dashboard/            management console (FastAPI + vanilla-JS single page) and the old evaluation view
-detection/external_data.py  loaders/dedupe for real datasets (FWAF, CSIC 2010, payload corpora)
-detection/run_external.py   trains/evaluates on them with CSIC 2010 held out
-detection/ml_behavior.py  unsupervised behavior model (rolling per-client features + Isolation Forest)
-detection/run_behavior.py  evaluates it and compares it with every other detector
-detection/run_novel.py  held-out test on attack payloads that are not in the generator's catalogue
-waf/                  Coraza + OWASP CRS inspection proxy (Go, built and run in Docker)
-tests/                unit tests for the rules
-data/                 generated datasets and predictions
+client -> wafgw proxy -> [lists, rate limit] -> 5 detectors -> noisy-OR fusion -> allow / 403 -> your app
+                                                    |                |
+                                  rules, payload ML, behavior ML,    +--> SQLite event log -> admin API -> console
+                                  schema, exemptions
 ```
 
-## Setup
+Diagram and a table of what each detector catches: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+Gateway API and event schema: [`wafgw/README.md`](wafgw/README.md).
+
+## Quick start
 
 ```bash
-python3 -m venv .venv
+python3 -m venv .venv                       # Python 3.11+
 .venv/bin/pip install -r requirements.txt
+.venv/bin/python -m unittest discover -s tests -t .      # needs no models and no downloaded data
+
+# 1) protect the demo API with the gateway (monitor mode first)
+.venv/bin/python -m wafgw.train                           # trains models/payload.joblib + behavior.joblib
+.venv/bin/uvicorn target_api.app:app --port 8000 &        # the demo application (vulnerable on purpose, localhost only)
+WAF_ADMIN_TOKEN=change-me .venv/bin/python -m wafgw       # proxy :8080 -> :8000, admin API 127.0.0.1:9000
+
+# 2) the console (second terminal)
+WAF_ADMIN_TOKEN=change-me .venv/bin/python -m dashboard   # http://127.0.0.1:8100
 ```
 
-## Generate a dataset
+Docker: `WAF_ADMIN_TOKEN=change-me docker compose up --build` (not built or tested yet). Without
+`data/external/` the models are trained on the synthetic demo dataset only; with it, on real data
+(see "Training on real datasets"). Details of each piece are below.
 
-Terminal 1 -- start the vulnerable API (restart it between runs for a clean state):
+## Results at a glance
 
-```bash
-.venv/bin/uvicorn target_api.app:app --host 127.0.0.1 --port 8000
-```
+All numbers come from the sections below, with their caveats. Detection quality depends heavily on
+the data: the demo dataset is synthetic, CSIC 2010 is one synthetic shop, the novel sets are small.
 
-Terminal 2 -- generate traffic:
+| Test | rules | Coraza + CRS | payload ML | behavior ML | schema | hybrid |
+|---|---|---|---|---|---|---|
+| Demo dataset: recall (3,732 requests, 1,092 attacks) | 64.7% | 39.1% | 44.3% | 17.0% | - | **84.5%** (1 false alarm) |
+| Held-out CSIC 2010: recall / false alarms (25k requests) | 14.9% / 0.0% | not run | 20.3% / 0.2% | - | 82.5% / 0.1% | rules+payload+schema 86.7% / 0.3% |
+| Novel payloads (30 attacks, 15 look-alikes) | 22/30, 0 FP | 30/30, 1 FP (earlier run) | 29/30, 1 FP (real-data model); 28/30, 0 FP (demo model) | - | - | - |
+| Blind harmless text (200 sentences x 3 shapes): false-alarm rate | 8.5% | not run | 16.0% (was 51.5%) | - | - | - |
 
-```bash
-.venv/bin/python -m traffic.generate --seed 42
-```
 
-Output: `data/dataset.csv` with one row per request: what the server saw
-(method, path, query, body, user agent, status, size, time) plus the ground-truth
-`label` (0 normal / 1 attack), `attack_type` and evasion `variant`.
+## The detectors
 
-## Run the rules detector
+
+### Rules detector (own WAF-style rules)
 
 ```bash
 .venv/bin/python -m detection.run_rules          # report on data/dataset.csv
@@ -77,10 +69,9 @@ path traversal and most brute force, but misses every BOLA and mass-assignment r
 the cases that need context or behavior, which is what the AI phases target.
 
 Caveat: the rules were written by the same author as the payload generator, so
-their recall on injection attacks is optimistic. Phase 4 will test on held-out,
-novel payloads.
+their recall on injection attacks is optimistic (see the held-out tests below).
 
-## Coraza + OWASP CRS baseline
+### Coraza + OWASP CRS baseline
 
 [Coraza](https://coraza.io) is an open-source, ModSecurity-compatible WAF written in Go. `waf/`
 is a small reverse proxy that runs every request through Coraza with the real OWASP Core Rule
@@ -137,7 +128,7 @@ user-agent rule (it changes almost nothing). An earlier generator where most
 attackers used sqlmap/Nikto agents let that one rule inflate Coraza's brute-force score and
 created fake "false alarms", so it was changed. The user agent must not be an ML feature.
 
-## Payload classifier (AI model #1)
+### Payload classifier (AI model #1)
 
 Learns from labeled requests instead of hand-written rules: character n-grams of the request
 (method, path shape with ids masked, parameter names, decoded values) plus a few numeric
@@ -158,7 +149,29 @@ with 0. A first version learned `--` as "attack" and flagged "a -- b" and "great
 again"; adding ~45 varied harmless sentences (`BENIGN_TEXT` in `traffic/payloads.py`, different
 from the test sentences, but written by the same author) to the training data fixed it.
 
-## Behavior model (AI model #2)
+**Hard negatives, second round (real-data model).** Once trained on real data (FWAF, payload lists,
+CRS tests) the model flagged about half of punctuation-heavy harmless text, because the benign side
+of those datasets has almost no punctuation. `detection/benign_text.py` now generates 12,000 harmless
+texts from 38 template families (apostrophes, dashes, quotes, `< >`, `%`, SQL/HTML words in natural
+use, code snippets, URLs, e-mails, accents and non-Latin scripts) as extra training rows, split by
+template family for validation. Sample weights (x2, x4) did not help and were dropped. Blind test:
+`detection/harmless_set.py` holds 200 harmless sentences written by hand after this design was
+frozen (no shared templates), each sent in three request shapes (`.venv/bin/python -m detection.run_external`):
+
+| model | false-alarm rate (requests) | sentences flagged in any shape |
+|---|---|---|
+| previous production model (no hard negatives) | 51.5% | 108/200 |
+| **with hard negatives (now)** | **16.0%** | **35/200** |
+| own rules | 8.5% | 17/200 |
+
+The price: on held-out CSIC 2010 the classifier's recall stayed 20.3% (was 20.7%) with 0.2% false
+alarms (was 0.1%), but its recall on the SQLi-looking CSIC requests fell from 94.6% to 80.6%, and the
+novel-attack set is unchanged (29/30 caught, 1/15 look-alikes flagged). Still open: a model that
+flags 16% of hard harmless text will annoy real users on punctuation-heavy fields (free-text
+comments); keep monitor mode and exemptions for those routes. The blind set has now been used
+once; write a new one before trusting a further improvement.
+
+### Behavior model (AI model #2)
 
 Unsupervised, no labels: for each request it summarises what that client did in the last 60 s
 (distinct order ids, share of order requests, errors, error ratio, 404s, failed logins) and an
@@ -183,7 +196,31 @@ feature sets using the labels, so these AUCs are slightly optimistic. Caveats: o
 6 brute-force clients in the data, and the model is fit on the same traffic it scores (normal
 for anomaly detection; a live system would train on earlier traffic).
 
-## Fusion and final evaluation (Phase 4)
+### API schema detection (5th detector)
+
+Positive security: learn what a normal request to each endpoint looks like (allowed methods,
+parameters, required fields, types, lengths, character classes) from clean traffic, or import an
+OpenAPI file, and flag what does not fit: unknown endpoint/method/parameter, missing required
+field, wrong type, length or charset outlier, privileged fields (`role`, `is_admin`, ...). A
+parameter counts as normal only if seen >= 5 times and in >= 0.5% of that endpoint's traffic, so a
+few attacks in the learning window do not poison it.
+
+```bash
+.venv/bin/python -m wafgw.schema_learn --openapi http://127.0.0.1:8000/openapi.json   # or --dataset / --events
+.venv/bin/python -m detection.run_schema --openapi http://127.0.0.1:8000/openapi.json
+```
+
+Held-out CSIC 2010 (learned on 4.8k normal requests, tested on 4.8k unseen normal + all 15.4k
+anomalies): schema alone 82.5% recall / 0.1% false alarms; rules + payload ML + schema 86.7% /
+0.3% (before: 23.9% / 0.1%). The 13.5k anomalies with no attack text: 80.5% (payload ML 9.9%). If
+the learning window has 5% anomalies mixed in, recall drops to 76.6%; at 20%, 53.7%. Demo API
+dataset: mass assignment 100%, 0 false alarms on 1.5k normal requests; the OpenAPI spec alone
+flags mass assignment and unknown fields with no learning. BOLA and brute force are not claimed.
+Caveats: CSIC is one synthetic shop (schema learning is unusually easy there); rarely visited
+pages false-alarm as unknown endpoints; the learning window must be clean. Not done: hot reload of
+`schema.json`, repeated-parameter check, exemptions per finding kind.
+
+### Fusion and final evaluation
 
 `detection/fusion.py` turns each detector into an "alert strength" (0.5 = this detector alone
 would alert: rules / Coraza score 5 of 10, payload ML p = 0.5, behavior = its alert-budget cutoff)
@@ -266,47 +303,79 @@ across sources before any split and makes attack and benign text the same shape;
 never used. `.venv/bin/python -m detection.run_external` evaluates.
 
 Held-out CSIC 2010 (25k requests, threshold 0.5): old model AUC 0.64 / recall 19% / false alarms
-0.2%; trained on everything AUC 0.63 / recall 21% / 0.1%; own rules recall 15%. Recall is low for
+0.2%; trained on everything AUC 0.63 / recall 20% / 0.2% (with the 12k hard negatives; 21% / 0.1% without); own rules recall 15%. Recall is low for
 every detector because ~13.5k of the 15.4k CSIC anomalies are structural (renamed parameters,
 extra path segments), not payload text. On the ~3k classifiable payload requests the models catch
 95-100%. Catching the structural ones needs a schema / unknown-parameter check (API security), the
-next feature. Leakage: a shape-only model scored AUC 0.93 inside training but 0.57 on CSIC, so
-the in-training cross-validation (AUC 0.99) is inflated; quote CSIC only. Weak spot: held-out
-harmless text with heavy punctuation is still flagged too often (17-49% on two small sets).
+next feature. Leakage: a shape-only model (lengths, slashes, character shares) scored AUC 0.91 inside training
+but 0.38 on CSIC, so the in-training leave-family-out cross-validation (AUC 0.99, recall 95.4%, 3.4% false alarms; harmless FWAF lines 0.6%, the 94 hand-made sentences 6.4%, CRS "negative" tests 50.8%) is inflated; quote CSIC only. Weak spot: held-out
+harmless text with heavy punctuation is still flagged too often (16% on the 200-sentence blind set, see
+the payload classifier section).
 
-## API schema detection (5th detector)
+## Generate a dataset
 
-Positive security: learn what a normal request to each endpoint looks like (allowed methods,
-parameters, required fields, types, lengths, character classes) from clean traffic, or import an
-OpenAPI file, and flag what does not fit: unknown endpoint/method/parameter, missing required
-field, wrong type, length or charset outlier, privileged fields (`role`, `is_admin`, ...). A
-parameter counts as normal only if seen >= 5 times and in >= 0.5% of that endpoint's traffic, so a
-few attacks in the learning window do not poison it.
+Terminal 1 -- start the vulnerable API (restart it between runs for a clean state):
 
 ```bash
-.venv/bin/python -m wafgw.schema_learn --openapi http://127.0.0.1:8000/openapi.json   # or --dataset / --events
-.venv/bin/python -m detection.run_schema --openapi http://127.0.0.1:8000/openapi.json
+.venv/bin/uvicorn target_api.app:app --host 127.0.0.1 --port 8000
 ```
 
-Held-out CSIC 2010 (learned on 4.8k normal requests, tested on 4.8k unseen normal + all 15.4k
-anomalies): schema alone 82.5% recall / 0.1% false alarms; rules + payload ML + schema 86.7% /
-0.3% (before: 23.9% / 0.1%). The 13.5k anomalies with no attack text: 80.5% (payload ML 9.9%). If
-the learning window has 5% anomalies mixed in, recall drops to 76.6%; at 20%, 53.7%. Demo API
-dataset: mass assignment 100%, 0 false alarms on 1.5k normal requests; the OpenAPI spec alone
-flags mass assignment and unknown fields with no learning. BOLA and brute force are not claimed.
-Caveats: CSIC is one synthetic shop (schema learning is unusually easy there); rarely visited
-pages false-alarm as unknown endpoints; the learning window must be clean. Not done: hot reload of
-`schema.json`, repeated-parameter check, exemptions per finding kind.
+Terminal 2 -- generate traffic:
+
+```bash
+.venv/bin/python -m traffic.generate --seed 42
+```
+
+Output: `data/dataset.csv` with one row per request: what the server saw
+(method, path, query, body, user agent, status, size, time) plus the ground-truth
+`label` (0 normal / 1 attack), `attack_type` and evasion `variant`.
+
+## Layout
+
+```
+common/seed.py          shared seed data (users, products, orders)
+target_api/app.py       intentionally vulnerable FastAPI app (local only, fake data)
+traffic/payloads.py     attack payload catalogue (with evasion variants) + harmless text for training
+traffic/generate.py     simulates users + attackers, writes data/dataset.csv
+detection/rules.py      rules detector: signature rules + rate/login-failure rules, CRS-style scoring
+detection/ml_payload.py supervised payload classifier (features + model + grouped cross-validation)
+detection/ml_behavior.py unsupervised behavior model (rolling per-client features + Isolation Forest)
+detection/schema.py     API schema detector (learned or OpenAPI)
+detection/fusion.py     noisy-OR score fusion
+detection/external_data.py  loaders/dedupe for real datasets (FWAF, CSIC 2010, payload corpora)
+detection/benign_text.py, harmless_set.py  hard-negative generator and the blind harmless test set
+detection/run_*.py      evaluation scripts (rules, waf, ml, behavior, novel, fusion, external, schema)
+detection/metrics.py, report.py  shared metrics and report printing
+wafgw/                  reverse-proxy WAF gateway (engine, proxy, event store, admin API, training)
+dashboard/              management console (FastAPI + vanilla-JS single page) and the evaluation view
+waf/                    Coraza + OWASP CRS inspection proxy (Go, built and run in Docker)
+docs/ARCHITECTURE.md    request-flow diagram and detector coverage table
+tests/                  unit tests (no models or downloaded data needed)
+data/                   demo dataset and predictions; data/external/ (git-ignored) holds real datasets
+.github/workflows/ci.yml  runs the tests on Python 3.11 and 3.12
+```
+
+## Roadmap
+
+1. Foundation (done): vulnerable demo API + labeled traffic generator
+2. Rules-based detector (done) and the Coraza + OWASP CRS baseline (done)
+3. AI: supervised payload classifier and unsupervised behavior model (done)
+4. Score fusion + evaluation (done)
+5. Management console (done)
+6. Reverse-proxy WAF gateway, training on real datasets, API schema detection (done)
+7. Next: TLS termination, Coraza chained into the gateway, shared state across gateway copies, response-side leak detection, paced demo replay, a blind set for each further model change.
 
 ## Attacks covered
 
-SQL injection, XSS (stored), path traversal, mass assignment, BOLA/IDOR,
-brute force / credential stuffing.
+SQL injection, XSS (stored), path traversal, command injection (real-data model only), mass assignment,
+BOLA/IDOR, brute force / credential stuffing, structural API anomalies (unknown/renamed parameters, odd paths).
 
 ## Safety
 
 The demo API is vulnerable on purpose. It only uses an in-memory database and a
-fake file system, and must only be bound to 127.0.0.1. Never deploy it.
+fake file system, and must only be bound to 127.0.0.1. Never deploy it. The gateway admin API
+refuses to start without `WAF_ADMIN_TOKEN`; the console has no login unless `CONSOLE_PASSWORD` is set,
+so keep it on localhost.
 
 ## Contributors
 

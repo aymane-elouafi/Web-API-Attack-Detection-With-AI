@@ -1,4 +1,5 @@
 """The reverse proxy: read the request, ask the engine, then forward it, block it, and log it."""
+import asyncio
 import contextlib
 import json
 import time
@@ -21,6 +22,21 @@ BLOCK_HTML = """<!doctype html><meta charset=utf-8><title>Request blocked</title
 <body style="font:16px system-ui;max-width:32rem;margin:15vh auto;padding:0 1rem">
 <h1>Request blocked</h1><p>This request was blocked by the web application firewall.</p>
 <p>Reference: <code>{rid}</code></p></body>"""
+
+
+def reject_websockets(app):
+    """The gateway inspects plain HTTP only. Proxying a WebSocket would bypass inspection, so refuse it clearly."""
+    async def wrapper(scope, receive, send):
+        if scope["type"] == "websocket":
+            if "websocket.http.response" in scope.get("extensions", {}):
+                await send({"type": "websocket.http.response.start", "status": 501,
+                            "headers": [(b"content-type", b"text/plain")]})
+                await send({"type": "websocket.http.response.body", "body": b"WebSocket is not supported by this gateway"})
+            else:
+                await send({"type": "websocket.close", "code": 1013})
+            return
+        await app(scope, receive, send)
+    return wrapper
 
 
 def _forward_headers(request: Request, ip: str, rid: str) -> list[tuple[bytes, bytes]]:
@@ -58,14 +74,30 @@ def build_app(cfg: dict, engine: Engine, store: Store, client: httpx.AsyncClient
 
     async def handle(request: Request) -> Response:
         rid = uuid.uuid4().hex[:12]
-        if int(request.headers.get("content-length") or 0) > p["max_body_bytes"]:
+        if request.headers.get("upgrade", "").lower() == "websocket":
+            return JSONResponse({"error": "websocket not supported", "request_id": rid}, 501)
+        declared = request.headers.get("content-length") or "0"
+        if not declared.isdigit():
+            return JSONResponse({"error": "invalid content-length", "request_id": rid}, 400)
+        if int(declared) > p["max_body_bytes"]:
             return JSONResponse({"error": "request body too large", "request_id": rid}, 413)
         chunks, size = [], 0
-        async for chunk in request.stream():
-            size += len(chunk)
-            if size > p["max_body_bytes"]:
-                return JSONResponse({"error": "request body too large", "request_id": rid}, 413)
-            chunks.append(chunk)
+
+        async def read_body() -> bool:
+            nonlocal size
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > p["max_body_bytes"]:
+                    return False
+                chunks.append(chunk)
+            return True
+
+        try:
+            fits = await asyncio.wait_for(read_body(), p["body_timeout_s"])   # slow-body (slowloris-style) clients
+        except asyncio.TimeoutError:
+            return JSONResponse({"error": "request body timeout", "request_id": rid}, 408)
+        if not fits:
+            return JSONResponse({"error": "request body too large", "request_id": rid}, 413)
         body = b"".join(chunks)
 
         peer = request.client.host if request.client else "0.0.0.0"
@@ -114,4 +146,4 @@ def build_app(cfg: dict, engine: Engine, store: Store, client: httpx.AsyncClient
         if state["client"] is not None and client is None:
             await state["client"].aclose()
 
-    return Starlette(routes=[Route("/{path:path}", handle, methods=METHODS)], lifespan=lifespan)
+    return reject_websockets(Starlette(routes=[Route("/{path:path}", handle, methods=METHODS)], lifespan=lifespan))

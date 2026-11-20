@@ -226,6 +226,17 @@ def load_benign_generated(n: int = 4000, seed: int = 0) -> pd.DataFrame:
     return pd.DataFrame(_rows([carry(t) for t in sorted(texts)], 0, "normal", "benign_gen", lambda s: _bucket(s[1] + s[2], 10)), columns=COLS)
 
 
+def load_benign_hard(n: int = 12000, seed: int = 1) -> pd.DataFrame:
+    """Template-generated punctuation-heavy harmless text (detection/benign_text.py); group = template id."""
+    from detection.benign_text import generate
+    rows = []
+    for text, tid in generate(n, seed):
+        m, path, query, body = carry(text)
+        rows.append(dict(method=m, path=path, query=query, body=body, label=0, attack_type="normal",
+                         source="benign_hard", group=f"t{tid}"))
+    return pd.DataFrame(rows, columns=COLS)
+
+
 # --- normalise + de-duplicate ---------------------------------------------------------------------
 def key(df: pd.DataFrame) -> pd.Series:
     """Request identity after URL-decoding twice, lower-casing and squeezing whitespace."""
@@ -244,5 +255,5 @@ def dedupe(df: pd.DataFrame, drop: pd.Series | None = None) -> pd.DataFrame:
 def load_all() -> tuple[pd.DataFrame, pd.DataFrame]:
     """(training set, CSIC 2010 test set). Training is purged of anything that is also in CSIC."""
     csic = dedupe(load_csic())
-    train = pd.concat([load_synthetic(), load_benign_generated(), load_fwaf(), load_payload_lists(), load_crs()], ignore_index=True)
+    train = pd.concat([load_synthetic(), load_benign_generated(), load_benign_hard(), load_fwaf(), load_payload_lists(), load_crs()], ignore_index=True)
     return dedupe(train, drop=key(csic)).reset_index(drop=True), csic.reset_index(drop=True)

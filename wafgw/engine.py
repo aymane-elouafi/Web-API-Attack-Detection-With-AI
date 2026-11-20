@@ -106,11 +106,58 @@ class Engine:
         self.rl = cfg["rate_limit"]
         self.buckets: dict[str, list] = {}
         self.rules = StatefulRules()
-        self.payload = joblib.load(models / "payload.joblib") if (models / "payload.joblib").exists() else None
-        self.behavior = Behavior(joblib.load(models / "behavior.joblib")) if (models / "behavior.joblib").exists() else None
-        self.schema = SchemaModel.from_json((models / "schema.json").read_text()) if (models / "schema.json").exists() else None
-        self.inspect_bytes = cfg["proxy"]["inspect_bytes"]
+        self.models_dir, self.reload_every = models, 5.0
         self._payload_score = lru_cache(maxsize=4096)(self._score_payload)   # sklearn costs ~2 ms; repeated requests are common
+        self.payload = self.behavior = self.schema = None
+        self._stamps: dict[str, tuple | None] = {}
+        self.reload_errors: dict[str, str] = {}
+        self.reload_models()
+        self._next_check = time.monotonic() + self.reload_every
+        self.inspect_bytes = cfg["proxy"]["inspect_bytes"]
+
+    _LOADERS = {"payload.joblib": ("payload", joblib.load),
+                "behavior.joblib": ("behavior", lambda p: Behavior(joblib.load(p))),
+                "schema.json": ("schema", lambda p: SchemaModel.from_json(p.read_text()))}
+
+    def reload_models(self) -> list[str]:
+        """Load every model file that is new, changed or gone; a broken file keeps the old model running."""
+        changed = []
+        for fname, (attr, load) in self._LOADERS.items():
+            path = self.models_dir / fname
+            st = path.stat() if path.exists() else None
+            stamp = (st.st_mtime_ns, st.st_size) if st else None
+            if stamp == self._stamps.get(fname):
+                continue
+            self._stamps[fname] = stamp                       # also on failure, so a bad file is not retried every request
+            try:
+                new = load(path) if st else None
+            except Exception as exc:                          # half-written or corrupt file
+                self.reload_errors[fname] = f"{type(exc).__name__}: {exc}"[:200]
+                continue
+            self.reload_errors.pop(fname, None)
+            old = getattr(self, attr)
+            if attr == "behavior" and old and new:            # keep the live per-client windows across a model swap
+                new.hist, new.owners = old.hist, old.owners
+            setattr(self, attr, new)
+            if attr == "payload":
+                self._payload_score.cache_clear()
+            changed.append(attr)
+        return changed
+
+    def reload_policy(self) -> None:
+        """Re-read mode, threshold, routes and exemptions from the store (settings changed outside this process)."""
+        if not self.store:
+            return
+        self.mode = self.store.get("mode") or self.mode
+        self.threshold = self.store.get("threshold") or self.threshold
+        self.set_routes(self.store.get("routes") or self.routes, persist=False)
+        self.store.exemption_cache = self.store.exemptions()
+
+    def reload(self) -> dict:
+        """Admin-triggered: models + policy, no restart."""
+        changed = self.reload_models()
+        self.reload_policy()
+        return {"reloaded": changed, "errors": self.reload_errors, "mode": self.mode, "threshold": self.threshold}
 
     def _score_payload(self, text: str, stats: tuple) -> float:
         return float(self.payload.score([text], np.array([stats]))[0])
@@ -149,6 +196,9 @@ class Engine:
     def inspect(self, info: dict) -> Verdict:
         """info: method, path, query, body, user_agent, client_ip, session, ts."""
         t0 = time.perf_counter()
+        if time.monotonic() >= self._next_check:              # cheap: three stat() calls every few seconds
+            self._next_check = time.monotonic() + self.reload_every
+            self.reload_models()
         route = self.route_for(info["path"])
         v = self._decide(info, route)
         v.route, v.latency_ms = route.get("prefix", ""), (time.perf_counter() - t0) * 1000

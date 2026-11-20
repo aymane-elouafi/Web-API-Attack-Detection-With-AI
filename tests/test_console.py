@@ -55,6 +55,11 @@ class ConsoleTests(unittest.TestCase):
         self.assertTrue(any(t["source"] == "rules" and t["rule"] == "SQLI-1" and t["text"] for t in x["terms"]))
         self.assertIn("1=1", x["decoded"]["query"])
 
+    def test_api_security_and_reload_calls_reach_the_gateway(self):
+        self.assertIn("endpoints", self.client.get("/api/gw/schema").json())       # the API Security page
+        self.assertIn("reloaded", self.client.post("/api/gw/reload").json())
+        self.assertEqual(self.client.get("/api/gw/not-a-call").status_code, 404)
+
     def test_feedback_and_audit_are_recorded(self):
         self.put(event(1))
         self.client.post("/api/gw/feedback", json={"event_id": 1, "verdict": "benign"})

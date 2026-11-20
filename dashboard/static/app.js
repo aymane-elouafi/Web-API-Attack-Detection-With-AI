@@ -22,10 +22,12 @@ let toastTimer;
 const toast = msg => { const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 3200); };
 
 async function api(path, opts = {}) {
-  const r = await fetch('/api' + path, { method: opts.method || (opts.body ? 'POST' : 'GET'), headers: { 'content-type': 'application/json' }, body: opts.body ? JSON.stringify(opts.body) : undefined });
+  let r;
+  try { r = await fetch('/api' + path, { method: opts.method || (opts.body ? 'POST' : 'GET'), headers: { 'content-type': 'application/json' }, body: opts.body ? JSON.stringify(opts.body) : undefined }); }
+  catch (e) { setGateway(false, true); throw e; }          // the console server itself did not answer
   if (r.status === 401) { showLogin(); throw new Error('login required'); }
   const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.detail || data.error || r.statusText);
+  if (!r.ok) { const e = new Error(data.detail || data.error || r.statusText); e.status = r.status; if (r.status === 502) setGateway(false); throw e; }
   return data;
 }
 const gw = (p, o) => api('/gw' + p, o);
@@ -43,8 +45,9 @@ const riskChip = (risk, thr) => h('span', { class: 'chip ' + riskClass(risk, thr
 const actionChip = a => h('span', { class: 'chip ' + (a === 'blocked' ? 'bad' : a === 'would_block' ? 'warn' : '') }, a === 'would_block' ? 'would block' : a);
 const bar = (v, cls = '') => h('div', { class: 'bar ' + cls }, h('i', { style: `width:${Math.min(100, v * 100)}%` }));
 const empty = t => h('div', { class: 'empty' }, t);
-const table = (cols, rows, onclick) => h('div', { class: 'wrap' }, h('table', {}, h('thead', {}, h('tr', {}, cols.map(c => h('th', {}, c)))),
-  h('tbody', {}, rows.length ? rows.map(r => h('tr', { class: onclick ? 'click' : '', onclick: onclick && (() => onclick(r)) }, r.cells.map(c => h('td', {}, c)))) : h('tr', {}, h('td', { colspan: cols.length }, empty('Nothing here yet'))))));
+const press = (el, fn) => { el.tabIndex = 0; el.addEventListener('keydown', ev => { if ((ev.key === 'Enter' || ev.key === ' ') && ev.target === el) { ev.preventDefault(); fn(); } }); return el; };
+const table = (cols, rows, onclick, none = 'Nothing here yet') => h('div', { class: 'wrap' }, h('table', {}, h('thead', {}, h('tr', {}, cols.map(c => h('th', {}, c)))),
+  h('tbody', {}, rows.length ? rows.map(r => { const tr = h('tr', { class: onclick ? 'click' : '', onclick: onclick && (() => onclick(r)) }, r.cells.map(c => h('td', {}, c))); return onclick ? press(tr, () => onclick(r)) : tr; }) : h('tr', {}, h('td', { colspan: cols.length }, empty(none))))));
 function highlight(text, terms) {
   const t = [...new Set(terms.map(x => x.trim()).filter(x => x.length >= 2))].sort((a, b) => b.length - a.length);
   if (!t.length || !text) return [text || ''];
@@ -68,12 +71,20 @@ function timeline(points) {
 }
 
 /* ---- drawer ------------------------------------------------------------------------------------- */
-let drawerOpen = false;
+let drawerOpen = false, drawerFrom = null;
 function openDrawer(title, body) {
   $('drawerTitle').textContent = title; $('drawerBody').replaceChildren(body);
-  $('drawer').classList.add('open'); $('drawer').setAttribute('aria-hidden', 'false'); $('drawerScrim').hidden = false; drawerOpen = true;
+  if (!drawerOpen) drawerFrom = document.activeElement;
+  $('drawer').inert = false; $('drawer').classList.add('open'); $('drawer').setAttribute('aria-hidden', 'false'); $('drawerScrim').hidden = false; drawerOpen = true;
+  $('drawerClose').focus();
 }
-function closeDrawer() { $('drawer').classList.remove('open'); $('drawer').setAttribute('aria-hidden', 'true'); $('drawerScrim').hidden = true; drawerOpen = false; }
+function closeDrawer() {
+  const was = drawerOpen;
+  $('drawer').classList.remove('open'); $('drawer').setAttribute('aria-hidden', 'true'); $('drawer').inert = true; $('drawerScrim').hidden = true; drawerOpen = false;
+  if (was && drawerFrom && document.contains(drawerFrom)) drawerFrom.focus();
+  drawerFrom = null;
+}
+addEventListener('focusin', e => { if (drawerOpen && !$('dlg').open && !$('drawer').contains(e.target)) $('drawerClose').focus(); });
 $('drawerClose').onclick = $('drawerScrim').onclick = closeDrawer;
 addEventListener('keydown', e => { if (e.key === 'Escape' && drawerOpen) closeDrawer(); });
 
@@ -142,7 +153,7 @@ views.overview = async root => {
   const liveBtn = h('button', { class: 'btn sm', onclick: () => { live = !live; liveBtn.textContent = live ? 'Pause' : 'Resume'; } }, 'Pause');
   async function load() {
     const o = await api('/overview?since=' + win), s = o.stats, ba = s.by_action, flagged = (ba.blocked || 0) + (ba.would_block || 0);
-    kpis.replaceChildren(...[['Requests', s.total], ['Flagged', s.total ? pct(flagged / s.total) : '0%'], ['Blocked', ba.blocked || 0], ['Would block', ba.would_block || 0], ['Added latency p95', s.latency_ms.p95 + ' ms'], ['Mean risk', s.avg_risk]].map(([k, v]) => h('div', { class: 'card kpi' }, h('b', {}, v), h('span', {}, k))));
+    kpis.replaceChildren(...[['Requests', s.total], ['Flagged', s.total ? pct(flagged / s.total) : '0%'], ['Blocked', ba.blocked || 0], ['Would block', ba.would_block || 0], ['Added latency p95', (+s.latency_ms.p95).toFixed(1) + ' ms'], ['Mean risk', s.avg_risk]].map(([k, v]) => h('div', { class: 'card kpi' }, h('b', {}, v), h('span', {}, k))));
     modeBox.replaceChildren(h('div', { class: 'seg', role: 'group', 'aria-label': 'Mode' }, ['monitor', 'block'].map(m => h('button', { 'aria-pressed': s.mode === m, onclick: () => setMode(m, s) }, m === 'monitor' ? 'Monitor' : 'Block'))));
     chart.replaceChildren(h('h2', {}, 'Traffic'), s.timeline.length ? timeline(s.timeline) : empty('No traffic in this window. Send some through the gateway.'));
     reasons.replaceChildren(h('h2', {}, 'Top reasons'), o.top_reasons.length ? h('div', { class: 'stack' }, o.top_reasons.map(([k, n]) => h('div', {}, h('div', { class: 'row' }, h('span', {}, k), h('span', { class: 'grow' }), h('b', {}, n)), bar(n / o.top_reasons[0][1])))) : empty('No flagged requests'));
@@ -161,10 +172,12 @@ views.overview = async root => {
     for (const e of fresh.reverse()) feed.prepend(feedRow(e));
     lastId = Math.max(lastId, ...evs.map(e => e.id)); while (feed.children.length > 30) feed.lastChild.remove();
   }
-  const feedRow = e => h('div', { class: 'click', style: 'cursor:pointer', onclick: () => openEvent(e.id, load) }, riskChip(e.risk, .5), h('span', { class: 'mono', style: 'word-break:break-all' }, `${e.method} ${e.path}${e.query ? '?' + e.query.slice(0, 80) : ''}`), h('span', { class: 'muted' }, actionChip(e.action)));
+  const feedRow = e => press(h('div', { class: 'click', role: 'button', style: 'cursor:pointer', onclick: () => openEvent(e.id, load) }, riskChip(e.risk, .5), h('span', { class: 'mono', style: 'word-break:break-all' }, `${e.method} ${e.path}${e.query ? '?' + e.query.slice(0, 80) : ''}`), h('span', { class: 'muted' }, actionChip(e.action))), () => openEvent(e.id, load));
   root.append(h('div', { class: 'stack page' }, h('div', { class: 'row' }, winSel, modeBox, h('span', { class: 'grow' }), h('span', { class: 'badge-live' }, h('i'), 'Live'), liveBtn), kpis, chart,
     h('div', { class: 'grid g2' }, reasons, sus), h('div', { class: 'grid g2' }, paths, h('div', { class: 'card' }, h('h2', {}, 'Live feed'), feed))));
-  await load(); await poll(); timer = setInterval(poll, 2000); const t2 = setInterval(load, 15000);
+  await load(); await poll();
+  if (!root.isConnected) return;                          // the user already navigated elsewhere
+  timer = setInterval(() => poll().catch(() => {}), 2000); const t2 = setInterval(() => load().catch(() => {}), 15000);
   cleanup = () => { clearInterval(timer); clearInterval(t2); };
 };
 
@@ -176,8 +189,8 @@ views.events = async root => {
     thr = (await gw('/mode')).threshold; const before = append && rows.length ? '&before_id=' + rows[rows.length - 1].id : '';
     const got = (await gw('/events' + q() + before)).events; rows = append ? rows.concat(got) : got; draw(got.length === 50);
   }
-  const draw = hasMore => list.replaceChildren(table(['Time', 'Risk', 'Action', 'Request', 'Client', 'Why'], rows.map(e => ({ id: e.id, cells: [h('span', { class: 'muted nw' }, clock(e.ts)), riskChip(e.risk, thr), actionChip(e.action), h('span', { class: 'mono' }, `${e.method} ${e.path}${e.query ? '?' + e.query.slice(0, 70) : ''}`), h('span', { class: 'mono' }, e.client_ip), Object.keys(e.detectors).filter(d => e.detectors[d] > 0).map(d => h('span', { class: 'chip' }, d))] })), r => openEvent(r.id, () => load())), hasMore ? h('div', { class: 'row end', style: 'margin-top:12px' }, more) : null);
-  const ctl = (el, key) => { el.addEventListener('input', () => { f[key] = el.value; clearTimeout(ctl.t); ctl.t = setTimeout(() => load(), 250); }); return el; };
+  const draw = hasMore => list.replaceChildren(table(['Time', 'Risk', 'Action', 'Request', 'Client', 'Why'], rows.map(e => ({ id: e.id, cells: [h('span', { class: 'muted nw' }, clock(e.ts)), riskChip(e.risk, thr), actionChip(e.action), h('span', { class: 'mono' }, `${e.method} ${e.path}${e.query ? '?' + e.query.slice(0, 70) : ''}`), h('span', { class: 'mono' }, e.client_ip), Object.keys(e.detectors).filter(d => e.detectors[d] > 0).map(d => h('span', { class: 'chip' }, d))] })), r => openEvent(r.id, () => load()), 'No events match. Send traffic through the gateway (or run: python -m traffic.replay), or relax the filters.'), hasMore ? h('div', { class: 'row end', style: 'margin-top:12px' }, more) : null);
+  const ctl = (el, key) => { el.addEventListener('input', () => { f[key] = el.value; clearTimeout(ctl.t); ctl.t = setTimeout(() => load().catch(e => toast(e.message)), 250); }); return el; };
   root.append(h('div', { class: 'stack page' }, h('div', { class: 'row' },
     ctl(h('select', { 'aria-label': 'Action' }, [['', 'All actions'], ['allowed', 'Allowed'], ['blocked', 'Blocked'], ['would_block', 'Would block']].map(([v, l]) => h('option', { value: v }, l))), 'action'),
     ctl(h('input', { placeholder: 'Client IP', 'aria-label': 'Client IP' }), 'ip'), ctl(h('input', { placeholder: 'Path contains', 'aria-label': 'Path' }), 'path'),
@@ -261,14 +274,14 @@ views.threats = async root => {
     evs.forEach((e, i) => { const c = svg('circle', { cx: 6 + i * (w - 12) / Math.max(evs.length - 1, 1), cy: hgt - 6 - e.risk * (hgt - 12), r: 3.5, fill: e.risk >= thr ? 'var(--bad)' : 'var(--mute)' }); s.append(c); });
     const denied = (await gw('/lists')).lists.some(l => l.ip === ip && l.kind === 'deny');
     openDrawer(ip, h('div', { class: 'stack' }, h('div', { class: 'row' }, h('span', { class: 'chip' }, `${evs.length} recent requests`), denied ? h('span', { class: 'chip bad' }, 'banned') : h('button', { class: 'btn danger', onclick: async () => { if (await ask('Ban ' + ip + '?', 'All requests from this address will get 403.', 'Ban')) { await act(() => gw('/lists', { body: { ip, kind: 'deny', note: 'banned from Threats' } }), 'Banned'); closeDrawer(); render(); } } }, 'Ban IP')),
-      h('div', {}, h('h3', {}, 'Risk over time'), s), h('div', {}, h('h3', {}, 'Story'), evs.slice(-40).reverse().map(e => h('div', { class: 'row', style: 'padding:5px 0;border-top:1px solid var(--line);cursor:pointer', onclick: () => openEvent(e.id) }, riskChip(e.risk, thr), h('span', { class: 'muted' }, clock(e.ts)), h('span', { class: 'mono grow', style: 'word-break:break-all' }, `${e.method} ${e.path}`), actionChip(e.action))))));
+      h('div', {}, h('h3', {}, 'Risk over time'), s), h('div', {}, h('h3', {}, 'Story'), evs.slice(-40).reverse().map(e => press(h('div', { class: 'row', role: 'button', style: 'padding:5px 0;border-top:1px solid var(--line);cursor:pointer', onclick: () => openEvent(e.id) }, riskChip(e.risk, thr), h('span', { class: 'muted' }, clock(e.ts)), h('span', { class: 'mono grow', style: 'word-break:break-all' }, `${e.method} ${e.path}`), actionChip(e.action)), () => openEvent(e.id))))));
   };
-  root.append(h('div', { class: 'card page' }, h('h2', {}, 'Clients by risk (last 24 h)'), table(['Client', 'Requests', 'Flagged', 'Max risk', 'Main signals', 'Last seen', ''], rows.map(r => ({ ip: r.ip, cells: [h('span', { class: 'mono' }, r.ip), r.requests, r.flagged, h('b', {}, r.max_risk.toFixed(2)), r.top.map(([d, n]) => h('span', { class: 'chip' }, `${d} ×${n}`)), h('span', { class: 'muted' }, ago(r.last_ts)), r.denied ? h('span', { class: 'chip bad' }, 'banned') : ''] })), r => timelineOf(r.ip))));
+  root.append(h('div', { class: 'card page' }, h('h2', {}, 'Clients by risk (last 24 h)'), table(['Client', 'Requests', 'Flagged', 'Max risk', 'Main signals', 'Last seen', ''], rows.map(r => ({ ip: r.ip, cells: [h('span', { class: 'mono' }, r.ip), r.requests, r.flagged, h('b', {}, r.max_risk.toFixed(2)), r.top.map(([d, n]) => h('span', { class: 'chip' }, `${d} ×${n}`)), h('span', { class: 'muted' }, ago(r.last_ts)), r.denied ? h('span', { class: 'chip bad' }, 'banned') : ''] })), r => timelineOf(r.ip), 'No clients yet. They appear as soon as traffic goes through the gateway.')));
 };
 
 views.apisec = async root => {
   const s = await gw('/schema');
-  if (!s.loaded) return root.append(h('div', { class: 'stack page' }, h('div', { class: 'card' }, h('h2', {}, 'No API schema loaded'), h('p', { class: 'muted', style: 'max-width:62ch' }, 'The schema detector flags requests that do not fit the API: unknown endpoints, parameters or methods, missing or mistyped fields, privileged fields such as role. Build one with: python -m wafgw.schema_learn --openapi <url> (or --dataset / --events), then restart the gateway.'))));
+  if (!s.loaded) return root.append(h('div', { class: 'stack page' }, h('div', { class: 'card' }, h('h2', {}, 'No API schema loaded'), h('p', { class: 'muted', style: 'max-width:62ch' }, 'The schema detector flags requests that do not fit the API: unknown endpoints, parameters or methods, missing or mistyped fields, privileged fields such as role. Build one with: python -m wafgw.schema_learn --openapi <url> (or --dataset / --events). The gateway picks the file up by itself within a few seconds, or press the button.'), h('div', { class: 'row' }, h('button', { class: 'btn primary', onclick: async () => { const r = await act(() => gw('/reload', { method: 'POST' })); toast(r.reloaded.length ? 'Loaded: ' + r.reloaded.join(', ') : 'Nothing new to load'); render(); } }, 'Reload models')))));
   const kinds = Object.entries(s.findings_24h).sort((a, b) => b[1] - a[1]);
   root.append(h('div', { class: 'stack page' },
     h('div', { class: 'card' }, h('h2', {}, 'Schema findings, last 24 h'), kinds.length ? h('div', { class: 'stack' }, kinds.map(([k, n]) => h('div', {}, h('div', { class: 'row' }, h('span', {}, k.replace(/_/g, ' ')), h('span', { class: 'grow' }), h('b', {}, n)), bar(n / kinds[0][1])))) : h('p', { class: 'muted' }, 'No request broke the schema.')),
@@ -294,7 +307,8 @@ views.settings = async root => {
     h('div', { class: 'card stack' }, h('h2', {}, 'Policy as code'), h('p', { class: 'muted', style: 'margin:0;max-width:62ch' }, 'Export mode, threshold, routes, IP lists, exemptions and alert settings as one JSON file you can review and keep in git. Import replaces the current policy (validated first, so a bad file changes nothing).'), box,
       h('div', { class: 'row' }, h('button', { class: 'btn', onclick: exportPolicy }, 'Export to editor'), h('button', { class: 'btn', onclick: async () => { const p = await exportPolicy(); const a = h('a', { href: URL.createObjectURL(new Blob([JSON.stringify(p, null, 2)], { type: 'application/json' })), download: 'aegis-policy.json' }); a.click(); } }, 'Download'),
         h('button', { class: 'btn primary', onclick: async () => { let d; try { d = JSON.parse(box.value); } catch { return toast('That is not valid JSON'); } if (await ask('Replace the current policy?', 'Mode, threshold, routes, lists, exemptions and alert settings will be replaced.', 'Import')) { await act(() => gw('/policy', { body: d }), 'Policy imported'); } } }, 'Import from editor'))),
-    h('div', { class: 'card' }, h('h2', {}, 'Gateway'), h('div', { class: 'row' }, h('span', { class: 'chip good' }, `up ${Math.round(health.uptime_s / 60)} min`), h('span', { class: 'chip ' + (health.models.payload ? 'good' : 'warn') }, 'payload model ' + (health.models.payload ? 'loaded' : 'missing')), h('span', { class: 'chip ' + (health.models.behavior ? 'good' : 'warn') }, 'behavior model ' + (health.models.behavior ? 'loaded' : 'missing')))),
+    h('div', { class: 'card' }, h('h2', {}, 'Gateway'), h('div', { class: 'row' }, h('span', { class: 'chip good' }, `up ${Math.round(health.uptime_s / 60)} min`), h('span', { class: 'chip ' + (health.models.payload ? 'good' : 'warn') }, 'payload model ' + (health.models.payload ? 'loaded' : 'missing')), h('span', { class: 'chip ' + (health.models.behavior ? 'good' : 'warn') }, 'behavior model ' + (health.models.behavior ? 'loaded' : 'missing')), h('span', { class: 'chip ' + (health.models.schema ? 'good' : '') }, 'API schema ' + (health.models.schema ? 'loaded' : 'not loaded')),
+      Object.entries(health.reload_errors || {}).map(([f, m]) => h('span', { class: 'chip bad' }, `${f}: ${m}`)), h('span', { class: 'grow' }), h('button', { class: 'btn sm', onclick: async () => { const r = await act(() => gw('/reload', { method: 'POST' })); toast(r.reloaded.length ? 'Loaded: ' + r.reloaded.join(', ') : 'Everything is up to date'); render(); } }, 'Reload models'))),
     h('div', { class: 'card' }, h('h2', {}, 'Audit log'), table(['When', 'Who', 'Change', 'Detail'], audit.map(a => ({ cells: [h('span', { class: 'muted' }, ago(a.ts)), a.actor, h('span', { class: 'mono' }, a.action), h('span', { class: 'mono muted', style: 'word-break:break-all' }, a.detail.slice(0, 120))] }))))));
 };
 
@@ -312,15 +326,40 @@ views.evaluation = async root => {
 
 /* ---- shell: router, login, boot ----------------------------------------------------------------- */
 function setBadge(n) { badge = n; const a = document.querySelector('nav a[href="#/inbox"]'); if (!a) return; a.querySelector('.n')?.remove(); if (n) a.append(h('span', { class: 'n' }, n)); }
+const skeleton = () => h('div', { class: 'stack', 'aria-hidden': 'true' }, h('div', { class: 'sk', style: 'height:40px;width:55%' }), h('div', { class: 'grid kpis' }, [0, 1, 2, 3].map(() => h('div', { class: 'sk', style: 'height:84px' }))), h('div', { class: 'sk', style: 'height:220px' }), h('div', { class: 'grid g2' }, h('div', { class: 'sk', style: 'height:160px' }), h('div', { class: 'sk', style: 'height:160px' })));
+function errorCard(e) {
+  const down = [502, 503, 504].includes(e.status), offline = e instanceof TypeError;
+  return h('div', { class: 'card stack page', role: 'alert' }, h('h2', {}, offline ? 'The console server is not answering' : down ? 'Can’t reach the gateway' : 'Something went wrong'),
+    h('p', { class: 'muted', style: 'margin:0;max-width:62ch' }, offline ? 'Check that “python -m dashboard” is still running.' : e.message),
+    down ? h('p', { class: 'muted', style: 'margin:0;max-width:62ch' }, 'Start the gateway with “WAF_ADMIN_TOKEN=… python -m wafgw”. This page reconnects by itself.') : null,
+    h('div', { class: 'row' }, h('button', { class: 'btn primary', onclick: render }, 'Try again')));
+}
+let renderId = 0, viewFailed = false, gwOk = true;
 async function render() {
   cleanup && cleanup(); cleanup = null;
   const name = (location.hash.match(/^#\/(\w+)/) || [])[1]; const key = views[name] ? name : 'overview';
-  document.querySelectorAll('nav a').forEach(a => a.toggleAttribute('aria-current', a.dataset.k === key) || a.removeAttribute('aria-current'));
-  document.querySelectorAll('nav a').forEach(a => { if (a.dataset.k === key) a.setAttribute('aria-current', 'page'); });
+  document.querySelectorAll('nav a').forEach(a => { if (a.dataset.k === key) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
+  document.querySelector('nav a[aria-current]')?.scrollIntoView({ inline: 'center', block: 'nearest' });   // phone: keep the current section visible in the scrolling bar
   $('title').textContent = NAV.find(n => n[0] === key)[1]; document.title = NAV.find(n => n[0] === key)[1] + ' · Aegis';
-  const root = h('div', {}); $('view').replaceChildren(root); closeDrawer();
-  try { await views[key](root); } catch (e) { if (e.message !== 'login required') root.replaceChildren(h('div', { class: 'card' }, h('h2', {}, 'Something went wrong'), h('p', { class: 'muted' }, e.message))); }
+  const view = $('view'), root = h('div', { hidden: true }), mine = ++renderId;
+  view.replaceChildren(root); view.setAttribute('aria-busy', 'true'); closeDrawer();
+  const skel = skeleton(), late = setTimeout(() => view.prepend(skel), 120);     // only if loading is not instant
+  try { await views[key](root); viewFailed = false; }
+  catch (e) { if (e.message !== 'login required') { root.replaceChildren(errorCard(e)); viewFailed = true; } }
+  clearTimeout(late); skel.remove();
+  if (mine === renderId) { root.hidden = false; view.removeAttribute('aria-busy'); }
 }
+function setGateway(ok, consoleDown = false) {
+  $('gwDot').className = 'dot ' + (ok ? 'ok' : 'bad'); $('gwText').textContent = ok ? 'Gateway connected' : consoleDown ? 'Console offline' : 'Gateway unreachable';
+  const b = $('banner'); b.hidden = ok;
+  if (!ok) b.textContent = consoleDown ? 'The console server is not answering. Retrying every 8 seconds.' : 'The gateway is unreachable, so what you see may be out of date. Retrying every 8 seconds.';
+  if (ok && !gwOk) { toast('Reconnected'); if (viewFailed) render(); }
+  gwOk = ok;
+}
+setInterval(async () => {
+  if ($('app').hidden) return;
+  try { const s = await fetch('/api/session').then(r => r.json()); if (s.logged_in) setGateway(s.gateway_ok); } catch { setGateway(false, true); }
+}, 8000);
 function showLogin() { $('app').hidden = true; $('login').hidden = false; $('pw').focus(); }
 $('loginForm').onsubmit = async e => { e.preventDefault(); try { await api('/login', { body: { password: $('pw').value } }); $('login').hidden = true; boot(); } catch (x) { $('loginErr').textContent = x.message; } };
 async function boot() {
@@ -328,7 +367,7 @@ async function boot() {
   if (!s.logged_in) return showLogin();
   $('login').hidden = true; $('app').hidden = false;
   $('nav').replaceChildren(...NAV.map(([k, l]) => h('a', { href: '#/' + k, 'data-k': k }, l)));
-  $('gwDot').className = 'dot ' + (s.gateway_ok ? 'ok' : 'bad'); $('gwText').textContent = s.gateway_ok ? 'Gateway connected' : 'Gateway unreachable';
+  setGateway(s.gateway_ok);
   if (s.auth_required) $('topRight').replaceChildren(h('button', { class: 'btn sm', onclick: async () => { await api('/logout', { method: 'POST' }); location.reload(); } }, 'Sign out'));
   render(); api('/inbox').then(i => setBadge(i.items.length)).catch(() => {});
 }

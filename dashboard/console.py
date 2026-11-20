@@ -25,7 +25,7 @@ from detection.run_novel import requests as novel_requests
 from wafgw.policy import DETECTORS, fuse, param_names, replay
 
 router = APIRouter(prefix="/api")
-PASSTHROUGH = {"events", "stats", "mode", "lists", "exemptions", "feedback", "audit", "routes", "policy", "settings", "health"}
+PASSTHROUGH = {"events", "stats", "mode", "lists", "exemptions", "feedback", "audit", "routes", "policy", "settings", "health", "schema", "reload"}
 _gw: httpx.AsyncClient | None = None
 ALERT_LOG: deque = deque(maxlen=50)
 RULE_BY_ID = {r.id: r for r in RULES}
@@ -47,6 +47,8 @@ async def gw(method: str, path: str, **kw):
         r = await _gw.request(method, path, headers=headers, **kw)
     except httpx.HTTPError:
         raise HTTPException(502, "gateway admin API unreachable (is `python -m wafgw` running with WAF_ADMIN_TOKEN?)")
+    if r.status_code == 401:                              # the gateway refused OUR token; not a console login problem
+        raise HTTPException(502, "gateway rejected the admin token (WAF_ADMIN_TOKEN must be the same for the gateway and the console)")
     if r.status_code >= 400:
         raise HTTPException(r.status_code, r.json().get("error", "gateway error") if "json" in r.headers.get("content-type", "") else "gateway error")
     return r.json()

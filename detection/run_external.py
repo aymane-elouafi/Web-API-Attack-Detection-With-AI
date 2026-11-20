@@ -9,6 +9,8 @@ novel hand-written attacks, and a format-only baseline that shows how much a mod
 by file-format shortcuts alone.
 """
 import argparse
+import json
+from urllib.parse import quote
 
 import numpy as np
 import pandas as pd
@@ -88,7 +90,8 @@ def main() -> None:
     steps = {"before: synthetic + harmless text (old model)": ["synthetic", "benign_text"],
              "+ FWAF": ["synthetic", "benign_text", "benign_gen", "fwaf_good", "fwaf_bad"],
              "+ payload lists + CRS tests": ["synthetic", "benign_text", "benign_gen", "payload_lists", "crs_tests"],
-             "after: everything": sorted(train.source.unique())}
+             "previous production: everything except hard negatives": sorted(set(train.source) - {"benign_hard"}),
+             "after: everything (+ 12k hard negatives)": sorted(train.source.unique())}
     models, rows, classes = {}, {}, {}
     for name, sources in steps.items():
         models[name] = m = fit(train[train.source.isin(sources)])
@@ -106,7 +109,24 @@ def main() -> None:
 
     # 2) punctuation-heavy benign text + novel attacks
     print("\n=== NOVEL HAND-WRITTEN ATTACKS / HARMLESS LOOK-ALIKES (run_novel lists) ===")
-    print(novel_eval({"before": models[next(iter(steps))], "after": models["after: everything"]}).to_string())
+    old, new = models["previous production: everything except hard negatives"], models["after: everything (+ 12k hard negatives)"]
+    print(novel_eval({"before (previous production)": old, "after": new}).to_string())
+
+    # 2b) blind harmless set: 200 hand-written sentences, each sent in all three request shapes
+    from detection.harmless_set import HARMLESS
+    h = pd.DataFrame([dict(zip(["method", "path", "query", "body"], shape)) for t in HARMLESS for shape in
+                      [("GET", "/search", "q=" + quote(t, safe=""), ""), ("GET", "/files", "name=" + quote(t, safe=""), ""),
+                       ("POST", "/comments", "", json.dumps({"text": t}))]])
+    h["sentence"] = np.repeat(np.arange(len(HARMLESS)), 3)
+    print("\n=== BLIND HARMLESS SET: 200 hand-written sentences x 3 request shapes (written after the design was frozen) ===")
+    hits = {}
+    for name, m in {"previous production (no hard negatives)": old, "after": new, **{k: v for k, v in models.items() if k.startswith("before:")}}.items():
+        t, x = prepare(h)
+        flag = m.score(t, x) >= THRESHOLD
+        hits[name] = {"false-alarm rate (requests)": pct(flag.mean()), "sentences flagged in any shape": f"{len(set(h.sentence[flag]))}/200"}
+    hf = rules_flags(h)
+    hits["own rules"] = {"false-alarm rate (requests)": pct(hf.mean()), "sentences flagged in any shape": f"{len(set(h.sentence[hf]))}/200"}
+    print(pd.DataFrame(hits).T.to_string())
 
     # 3) format-only baseline: how much can request shape alone explain?
     f_train, f_csic = format_features(train), format_features(csic)

@@ -1,5 +1,5 @@
 # WAF gateway configuration. Every key is optional; these are the defaults.
-# Env overrides: WAFGW_CONFIG (path), WAFGW_UPSTREAM, WAFGW_MODE, WAFGW_DB, WAFGW_ADMIN_LISTEN, WAF_ADMIN_TOKEN.
+# Env overrides: WAFGW_CONFIG (path), WAFGW_UPSTREAM, WAFGW_MODE, WAFGW_DB, WAFGW_ADMIN_LISTEN, WAFGW_TRUST_FORWARDED, WAF_ADMIN_TOKEN.
 
 [proxy]
 listen = "0.0.0.0:8080"          # where clients connect
@@ -7,7 +7,12 @@ upstream = "http://127.0.0.1:8000"  # the application being protected
 max_body_bytes = 1048576          # bigger request bodies get 413
 inspect_bytes = 65536             # only the first N body bytes are analysed
 upstream_timeout_s = 30
+body_timeout_s = 30               # a client that sends its body slower than this gets 408 (slow-body attacks)
 trust_forwarded = false           # true: take the client IP from X-Forwarded-For (only behind your own LB)
+
+[tls]                             # optional TLS termination on the proxy port (both files, PEM)
+cert = ""
+key = ""
 
 [engine]
 mode = "monitor"                  # monitor = log only ("would_block"); block = answer 403
