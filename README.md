@@ -9,7 +9,8 @@ combined into one risk score. (AI module project.)
 2. **Rules-based detector** (done): our own WAF-style rules, plus **Coraza + OWASP CRS** as the industry baseline (done)
 3. AI: supervised payload classifier (done); unsupervised behavior model (done, see below)
 4. Score fusion + evaluation (rules vs AI vs hybrid)
-5. Management interface (dashboard) -- first version done, see below
+5. Management interface (console) -- done, see below
+6. **Real reverse-proxy WAF gateway** (`wafgw/`) and training on real datasets -- done, see below
 
 ## Layout
 
@@ -25,7 +26,10 @@ detection/run_waf.py  evaluates Coraza+CRS and compares it with our rules
 detection/report.py   report printing shared by all detectors
 detection/ml_payload.py  supervised payload classifier (features + model + grouped cross-validation)
 detection/run_ml.py   evaluates it and compares it with the rules and Coraza
-dashboard/            read-only management dashboard (FastAPI + one HTML page)
+wafgw/                reverse-proxy WAF gateway (rules + 2 AI models + fusion, block/monitor, event log, admin API)
+dashboard/            management console (FastAPI + vanilla-JS single page) and the old evaluation view
+detection/external_data.py  loaders/dedupe for real datasets (FWAF, CSIC 2010, payload corpora)
+detection/run_external.py   trains/evaluates on them with CSIC 2010 held out
 detection/ml_behavior.py  unsupervised behavior model (rolling per-client features + Isolation Forest)
 detection/run_behavior.py  evaluates it and compares it with every other detector
 detection/run_novel.py  held-out test on attack payloads that are not in the generator's catalogue
@@ -212,25 +216,63 @@ model; small, indicative only): own rules 22/30, 0 false alarms; payload ML 28/3
 30/30, 1 (Coraza measured earlier, not re-run since the payload fix). Coraza is strongest on unseen injections, the hybrid's value is coverage of
 behavior attacks, not payloads.
 
-## Dashboard (Phase 5)
+## Reverse-proxy WAF gateway (`wafgw/`)
 
-Read-only, local, vanilla JS (no external libraries), light and dark, works at phone width,
-respects reduced motion / transparency / contrast. It reads `data/` only and never talks to the
-demo API.
+The detectors, packaged as a real WAF: it sits in front of your server, inspects every request
+(own rules + stateful rate/login rules, payload ML, online behavior model, noisy-OR fusion) and
+either forwards it or answers with a clean 403.
 
 ```bash
-.venv/bin/uvicorn dashboard.app:app --host 127.0.0.1 --port 8100   # then open http://127.0.0.1:8100
+.venv/bin/python -m wafgw.train                      # trains models/payload.joblib + behavior.joblib
+WAF_ADMIN_TOKEN=change-me .venv/bin/python -m wafgw  # proxy :8080 -> upstream in waf.toml, admin 127.0.0.1:9000
+# or: WAF_ADMIN_TOKEN=... docker compose up --build   (gateway + demo API; image not built/tested yet)
 ```
 
-- **Overview:** every detector side by side, recall by attack type. The threshold slider in the
-  top bar re-decides the hybrid live (lower = more alerts, more false alarms).
-- **Alerts:** flagged / missed attacks / false alarms, with the reason (which detectors fired,
-  rule and Coraza ids).
-- **Clients:** ranked by riskiest request; click one for its request timeline (risk, which
-  detectors flagged each request, why).
-- **Live feed:** Play/Pause replays the dataset in time order (1x / 4x / 20x), colouring rows by risk.
+Modes: **monitor** (forward everything, log "would block") and **block**; IP allow/deny lists,
+per-route overrides, token-bucket rate limit, fail-open/closed policy, scoped exemptions for false
+positives, SQLite event log (WAL, background writer, passwords redacted), token-protected admin
+API (documented in `wafgw/README.md`, which also holds the event schema). Measured overhead:
+about +0.3 ms for repeated requests, +5 ms for new text (the payload model runs).
+Not done: TLS termination (put it behind Caddy/nginx or add certs), Coraza chained in,
+sharing state between several gateway copies, WebSockets, log rotation.
 
-Not built: real live traffic, user accounts, editing rules.
+## Management console
+
+`python -m dashboard` serves a vanilla-JS single page (no CDN, light/dark, phone width, designed
+with the apple-design skill). The gateway token stays on the server.
+
+```bash
+WAF_ADMIN_TOKEN=change-me .venv/bin/python -m dashboard                    # http://127.0.0.1:8100, no login, localhost only
+CONSOLE_PASSWORD=... WAF_ADMIN_TOKEN=change-me .venv/bin/python -m dashboard   # with a login
+```
+
+Pages: **Overview** (trend, top reasons, live feed, monitor/block switch), **Events** (explain
+panel: per-detector strengths, rule evidence, the n-grams that drove the ML score, offending text
+highlighted; mark benign/attack, exempt, ban), **Learning Inbox** (suggested scoped exemptions with
+simulated impact; unsafe ones cannot be approved), **Policies** (mode, threshold, routes, lists,
+live preview), **Simulator** (replays stored events + a known-attack corpus; the server refuses a
+change that would lose a known attack), **Threats** (per-client timelines), **Alerts**
+(Slack/Discord/webhook with dedup), **Settings** (policy export/import as JSON, audit log),
+**Evaluation** (the dataset comparison of all detectors). Known issue: the demo generator sends
+requests in seconds, so the behavior detector flags ~55% of the demo traffic; a paced replay
+would fix the demo, not the detectors.
+
+## Training on real datasets
+
+Downloaded to `data/external/` (git-ignored; sources, sizes and licence notes in
+`data/external/SOURCES.md`): FWAF, CSIC 2010 (held out, never trained on), PayloadsAllTheThings,
+SecLists Fuzzing, OWASP CRS regression tests. `detection/external_data.py` normalises, dedupes
+across sources before any split and makes attack and benign text the same shape; headers are
+never used. `.venv/bin/python -m detection.run_external` evaluates.
+
+Held-out CSIC 2010 (25k requests, threshold 0.5): old model AUC 0.64 / recall 19% / false alarms
+0.2%; trained on everything AUC 0.63 / recall 21% / 0.1%; own rules recall 15%. Recall is low for
+every detector because ~13.5k of the 15.4k CSIC anomalies are structural (renamed parameters,
+extra path segments), not payload text. On the ~3k classifiable payload requests the models catch
+95-100%. Catching the structural ones needs a schema / unknown-parameter check (API security), the
+next feature. Leakage: a shape-only model scored AUC 0.93 inside training but 0.57 on CSIC, so
+the in-training cross-validation (AUC 0.99) is inflated; quote CSIC only. Weak spot: held-out
+harmless text with heavy punctuation is still flagged too often (17-49% on two small sets).
 
 ## Attacks covered
 

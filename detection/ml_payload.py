@@ -69,11 +69,11 @@ def benign_extras() -> tuple[list[str], np.ndarray]:
 
 
 class PayloadModel:
-    def fit(self, texts, nums, y):
+    def fit(self, texts, nums, y, sample_weight=None):
         self.tfidf = TfidfVectorizer(analyzer="char", ngram_range=(2, 4), min_df=2, sublinear_tf=True)
         self.scale = MaxAbsScaler()
         X = hstack([self.tfidf.fit_transform(texts), csr_matrix(self.scale.fit_transform(nums))]).tocsr()
-        self.clf = LogisticRegression(C=10, max_iter=2000, class_weight="balanced").fit(X, y)
+        self.clf = LogisticRegression(C=10, max_iter=2000, class_weight="balanced").fit(X, y, sample_weight=sample_weight)
         return self
 
     def score(self, texts, nums) -> np.ndarray:

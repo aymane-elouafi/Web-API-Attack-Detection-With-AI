@@ -1,0 +1,29 @@
+# Demo: the vulnerable target API behind the WAF gateway.
+#   WAF_ADMIN_TOKEN=pick-a-long-secret docker compose up --build
+#   client traffic -> http://localhost:8080      admin API -> http://127.0.0.1:9000 (localhost only)
+services:
+  target:                      # intentionally vulnerable demo app: never publish its port
+    image: python:3.12-slim
+    working_dir: /app
+    volumes: ["./:/app:ro"]
+    command: sh -c "pip install -q --no-cache-dir fastapi uvicorn && python -B -m uvicorn target_api.app:app --host 0.0.0.0 --port 8000"
+    expose: ["8000"]
+
+  gateway:
+    build: { context: ., dockerfile: Dockerfile.gateway }
+    depends_on: [target]
+    environment:
+      WAF_ADMIN_TOKEN: ${WAF_ADMIN_TOKEN:?set WAF_ADMIN_TOKEN}
+      WAFGW_UPSTREAM: http://target:8000
+      WAFGW_ADMIN_LISTEN: 0.0.0.0:9000     # inside the container; published to localhost only below
+      WAFGW_MODE: ${WAFGW_MODE:-monitor}   # start in monitor, switch to block via the admin API when happy
+    ports: ["8080:8080", "127.0.0.1:9000:9000"]
+    volumes: ["wafdata:/var/lib/wafgw"]
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+volumes:
+  wafdata:

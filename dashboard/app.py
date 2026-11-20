@@ -1,22 +1,51 @@
-"""Management dashboard (read-only, local): detector comparison, threshold control, alert inspector.
+"""Management console for the WAF gateway (live events, policies, learning inbox, simulator, threats, alerts)
+plus the offline Evaluation page (detector comparison on the labeled dataset).
 
-    .venv/bin/uvicorn dashboard.app:app --host 127.0.0.1 --port 8100     then open http://127.0.0.1:8100
+    WAF_ADMIN_TOKEN=... .venv/bin/python -m dashboard        then open http://127.0.0.1:8100
 
-It reads data/dataset.csv and the data/predictions_*.csv files; it never talks to the target API.
-Ground-truth labels are shown as "truth" because this is an evaluation dashboard.
+The Evaluation page reads data/dataset.csv and data/predictions_*.csv; ground-truth labels are shown as "truth".
+Everything under /api/eval is that offline view; the rest talks to the gateway admin API (dashboard/console.py).
 """
+import asyncio
+import contextlib
 from functools import cache
 from pathlib import Path
 
 import pandas as pd
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from detection import metrics
 from detection.fusion import fuse, strengths
+from dashboard import console
 from detection.run_fusion import load
 
-app = FastAPI(title="Web API Attack Detection")
+STATIC = Path(__file__).with_name("static")
+
+
+@contextlib.asynccontextmanager
+async def lifespan(app):
+    task = asyncio.create_task(console.alert_worker())
+    yield
+    task.cancel()
+
+
+app = FastAPI(title="WAF console", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def login_wall(request: Request, call_next):
+    open_paths = ("/api/session", "/api/login", "/api/logout")
+    if request.url.path.startswith("/api/") and request.url.path not in open_paths and not console.authorized(request):
+        return JSONResponse({"detail": "login required"}, 401)
+    resp = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        resp.headers["cache-control"] = "no-cache"          # always revalidate: the UI files change with the code
+    return resp
+
+
+app.include_router(console.router)
 DETECTORS = {"rules": "rule_flag", "Coraza": "waf_flag", "payload ML": "ml_flag", "behavior ML": "beh_flag"}
 
 
@@ -38,10 +67,13 @@ def decided(threshold: float) -> pd.DataFrame:
 
 @app.get("/")
 def index():
-    return FileResponse(Path(__file__).with_name("index.html"))
+    return FileResponse(STATIC / "index.html")
 
 
-@app.get("/api/summary")
+app.mount("/static", StaticFiles(directory=STATIC), name="static")
+
+
+@app.get("/api/eval/summary")
 def summary(threshold: float = 0.5):
     df = decided(threshold)
     flags = {**DETECTORS, "hybrid": "hybrid"}
@@ -56,7 +88,7 @@ def summary(threshold: float = 0.5):
             "by_type": by_type.reset_index().to_dict("records")}
 
 
-@app.get("/api/alerts")
+@app.get("/api/eval/alerts")
 def alerts(threshold: float = 0.5, show: str = "flagged", limit: int = 100):
     """show: flagged | missed (attacks nobody flagged) | false_alarms."""
     df = decided(threshold)
@@ -77,7 +109,7 @@ def rows_of(rows: pd.DataFrame, parts: pd.DataFrame) -> list[dict]:
              "rule_hits": r.rule_hits, "coraza_rules": r.waf_rules} for i, r in rows.iterrows()]
 
 
-@app.get("/api/clients")
+@app.get("/api/eval/clients")
 def clients(threshold: float = 0.5, limit: int = 200):
     """Clients ranked by their riskiest request."""
     df = decided(threshold)
@@ -89,13 +121,13 @@ def clients(threshold: float = 0.5, limit: int = 200):
     return {"total": int(g.ngroups), "rows": [{"client": ip, **r} for ip, r in out.to_dict("index").items()]}
 
 
-@app.get("/api/client")
+@app.get("/api/eval/client")
 def client_timeline(ip: str, threshold: float = 0.5):
     df = decided(threshold)
     return {"client": ip, "rows": rows_of(df[df.client_ip == ip], frame()[1])}
 
 
-@app.get("/api/feed")
+@app.get("/api/eval/feed")
 def feed(after: int = -1, n: int = 20, threshold: float = 0.5):
     """Replay in time order: rows after position `after`; send back `next` as the new cursor."""
     df = decided(threshold)

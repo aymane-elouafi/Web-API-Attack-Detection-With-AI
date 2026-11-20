@@ -1,0 +1,39 @@
+# WAF gateway configuration. Every key is optional; these are the defaults.
+# Env overrides: WAFGW_CONFIG (path), WAFGW_UPSTREAM, WAFGW_MODE, WAFGW_DB, WAFGW_ADMIN_LISTEN, WAF_ADMIN_TOKEN.
+
+[proxy]
+listen = "0.0.0.0:8080"          # where clients connect
+upstream = "http://127.0.0.1:8000"  # the application being protected
+max_body_bytes = 1048576          # bigger request bodies get 413
+inspect_bytes = 65536             # only the first N body bytes are analysed
+upstream_timeout_s = 30
+trust_forwarded = false           # true: take the client IP from X-Forwarded-For (only behind your own LB)
+
+[engine]
+mode = "monitor"                  # monitor = log only ("would_block"); block = answer 403
+threshold = 0.5                   # fused risk (0-1) at which a request counts as an attack
+on_error = "fail_open"            # engine crash: fail_open = forward anyway, fail_closed = 503
+
+[admin]
+listen = "127.0.0.1:9000"         # needs WAF_ADMIN_TOKEN in the environment, otherwise it is not started
+
+[rate_limit]
+enabled = false
+rate_per_s = 20                   # sustained requests per second per client IP
+burst = 40
+
+[store]
+path = "data/waf.db"
+
+[models]
+dir = "models"                    # python -m wafgw.train writes payload.joblib and behavior.joblib here
+
+# Per-route overrides (longest matching prefix wins): mode, threshold, disabled.
+[[routes]]
+prefix = "/health"
+disabled = true
+
+# [[routes]]
+# prefix = "/login"
+# mode = "block"
+# threshold = 0.4

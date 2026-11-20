@@ -1,0 +1,18 @@
+# WAF gateway image: reverse proxy + engine + admin API. The AI models are trained at build time
+# from data/dataset.csv, so the image is self-contained.
+FROM python:3.12-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+RUN pip install --no-cache-dir starlette uvicorn httpx pandas scikit-learn joblib
+WORKDIR /app
+COPY detection detection
+COPY traffic/__init__.py traffic/payloads.py traffic/
+COPY wafgw wafgw
+COPY waf.toml .
+COPY data/dataset.csv data/dataset.csv
+RUN python -m wafgw.train --data data/dataset.csv --out models \
+ && useradd --system --uid 10001 waf && mkdir /var/lib/wafgw && chown waf /var/lib/wafgw
+USER waf
+# Mount a volume on /var/lib/wafgw to keep the event log; everything else can be read-only.
+ENV WAFGW_DB=/var/lib/wafgw/waf.db WAFGW_UPSTREAM=http://target:8000
+EXPOSE 8080 9000
+CMD ["python", "-m", "wafgw"]

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Aegis Console</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="login" hidden>
+  <form class="sheet-card" id="loginForm">
+    <h1>Aegis</h1>
+    <p class="muted">Enter the console password.</p>
+    <input id="pw" type="password" autocomplete="current-password" aria-label="Password" autofocus>
+    <button class="btn primary" type="submit">Continue</button>
+    <p class="err" id="loginErr" role="alert"></p>
+  </form>
+</div>
+<div id="app" hidden>
+  <aside class="side material">
+    <div class="brand"><span class="logo"></span><b>Aegis</b></div>
+    <nav id="nav" aria-label="Sections"></nav>
+    <div class="side-foot"><span id="gwDot" class="dot"></span><span id="gwText" class="muted">Gateway</span></div>
+  </aside>
+  <main>
+    <header class="top material"><h1 id="title"></h1><div id="topRight"></div></header>
+    <div id="view" tabindex="-1"></div>
+  </main>
+</div>
+<div id="drawerScrim" class="scrim" hidden></div>
+<aside id="drawer" class="drawer material" aria-hidden="true" aria-label="Details"><div class="drawer-bar"><button class="icon-btn" id="drawerClose" aria-label="Close">&times;</button><span id="drawerTitle"></span></div><div id="drawerBody"></div></aside>
+<dialog id="dlg"><form method="dialog"><h2 id="dlgTitle"></h2><div id="dlgBody" class="muted"></div><div class="row end"><button class="btn" value="cancel">Cancel</button><button class="btn primary" value="ok" id="dlgOk"></button></div></form></dialog>
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
