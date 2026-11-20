@@ -86,6 +86,25 @@ An **exemption** silences one detector (strength 0, logged as `exempt (was 0.62)
 rate limiter. Shared logic (fusion, exemption matching, replay of stored events under a candidate policy) lives in
 `wafgw/policy.py`, so the engine, the console and the simulator agree.
 
+## Schema detector (5th detector, `schema`)
+
+Positive security: flags requests that do not fit the API (unknown endpoint / parameter / method, missing required
+field, wrong type, value outside a closed set, odd characters or length, privileged fields such as `role`). Code and
+policy: `detection/schema.py` (strengths fixed in advance: hard breaks 0.5-0.6, soft signals 0.3-0.45, noisy-OR, 0.5 = alert).
+
+```bash
+.venv/bin/python -m wafgw.schema_learn --openapi http://127.0.0.1:8000/openapi.json   # from a spec, no traffic needed
+.venv/bin/python -m wafgw.schema_learn --events data/waf.db                          # from allowed gateway events (clean window!)
+.venv/bin/python -m wafgw.schema_learn --dataset data/dataset.csv                    # from labeled normal rows
+# any combination: learned endpoints fill in, the spec wins on the endpoints it defines. Writes models/schema.json; restart the gateway.
+```
+
+Without `models/schema.json` the detector is skipped. Per-route switch: `[[routes]] prefix = "/x"`, `schema = false`. Reasons look like
+`{"detector": "schema", "strength": 0.76, "detail": "privileged_field: 'role' is not a known field of PUT /users/me; ..."}`.
+Exemptions can silence `schema` like any detector. `GET /api/schema` (admin): `{loaded, findings_24h:{kind: count}, endpoints:[...]}`;
+`/api/health` models now include `schema`. Learning guard: a field, value or character needs 5+ sightings and 0.5% of the
+endpoint's requests; the learning window must still be clean (attacks repeated 5+ times look normal).
+
 ## Known limits
 
 Single process (detectors run in the event loop: about 0.3 ms added per request for repeated

@@ -17,6 +17,7 @@ import numpy as np
 from detection.ml_behavior import FEATURES, WINDOW
 from detection.ml_payload import _stats, request_text
 from detection.rules import StatefulRules, stateless_hits
+from detection.schema import SchemaModel
 from wafgw.policy import exempt_detectors, fuse
 
 _ORDER = re.compile(r"^/orders/\d+$")
@@ -107,6 +108,7 @@ class Engine:
         self.rules = StatefulRules()
         self.payload = joblib.load(models / "payload.joblib") if (models / "payload.joblib").exists() else None
         self.behavior = Behavior(joblib.load(models / "behavior.joblib")) if (models / "behavior.joblib").exists() else None
+        self.schema = SchemaModel.from_json((models / "schema.json").read_text()) if (models / "schema.json").exists() else None
         self.inspect_bytes = cfg["proxy"]["inspect_bytes"]
         self._payload_score = lru_cache(maxsize=4096)(self._score_payload)   # sklearn costs ~2 ms; repeated requests are common
 
@@ -177,6 +179,11 @@ class Engine:
             raw, s = self.behavior.strength(row)
             reasons.append({"detector": "behavior", "score": round(raw, 4), "strength": s,
                             "detail": dict(zip(FEATURES, (round(x, 2) for x in row)))})
+        if self.schema is not None and route.get("schema", True):
+            found = self.schema.score(info["method"], info["path"], info["query"], body)
+            if found:
+                reasons.append({"detector": "schema", "score": len(found), "strength": self.schema.strength(found),
+                                "detail": "; ".join(f"{f['kind']}: {f['detail']}" for f in found[:5])})
         silenced = exempt_detectors(self.store.exemption_cache, info["path"], info["query"], body) if self.store else set()
         for r in reasons:
             if r["detector"] in silenced and r["strength"] > 0:

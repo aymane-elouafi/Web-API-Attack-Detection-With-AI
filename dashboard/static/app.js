@@ -94,6 +94,7 @@ async function openEvent(id, onChange) {
     x.exempt.length ? h('div', { class: 'chip good' }, 'An exemption silenced: ' + x.exempt.map(r => r.detector).join(', ')) : null,
     h('div', {}, h('h3', {}, 'Request'), h('pre', { class: 'req', style: 'margin-top:8px' }, highlight(`${ev.method} ${ev.path}${ev.query ? '?' + ev.query : ''}`, terms), x.decoded.query ? ['\n\ndecoded: ', highlight(x.decoded.query, terms)] : '', x.decoded.body ? ['\n\nbody: ', highlight(x.decoded.body, terms)] : '', '\n\nuser-agent: ', highlight(ev.user_agent, terms))),
     ev.detectors.behavior != null || ev.reasons.some(r => r.detector === 'behavior') ? behaviorBox(ev) : null,
+    schemaBox(ev),
     h('div', { class: 'stack' }, h('h3', {}, 'Decide'), h('div', { class: 'row' },
       h('button', { class: 'btn primary', onclick: async () => { await act(() => api('/gw/feedback', { body: { event_id: id, verdict: 'benign' } }), 'Marked benign. See the Learning Inbox.'); fb.textContent = 'You marked this benign.'; onChange && onChange(); } }, 'Not an attack'),
       h('button', { class: 'btn', onclick: async () => { await act(() => api('/gw/feedback', { body: { event_id: id, verdict: 'attack' } }), 'Marked as a real attack'); fb.textContent = 'You marked this attack.'; onChange && onChange(); } }, 'Real attack'),
@@ -107,8 +108,12 @@ function behaviorBox(ev) {
   const r = ev.reasons.find(r => r.detector === 'behavior'); if (!r || typeof r.detail !== 'object') return null;
   return h('div', {}, h('h3', {}, 'Client behavior (last 60 s)'), h('div', { class: 'row', style: 'margin-top:8px' }, Object.entries(r.detail).map(([k, v]) => h('span', { class: 'chip' }, `${k.replace(/_/g, ' ')}: ${v}`))));
 }
+function schemaBox(ev) {
+  const r = ev.reasons.find(r => r.detector === 'schema'); if (!r) return null;
+  return h('div', {}, h('h3', {}, 'API schema'), h('div', { class: 'stack', style: 'margin-top:8px' }, r.detail.split('; ').map(p => h('div', {}, h('span', { class: 'chip bad' }, p.split(':')[0]), ' ', h('span', { class: 'muted' }, p.slice(p.indexOf(':') + 1))))));
+}
 function exemptFormFill(form, ev, detector) {
-  const prefix = h('input', { value: ev.path, 'aria-label': 'Path prefix' }), det = h('select', { 'aria-label': 'Detector' }, ['rules', 'payload ML', 'behavior'].map(d => h('option', { value: d, selected: d === detector }, d)));
+  const prefix = h('input', { value: ev.path, 'aria-label': 'Path prefix' }), det = h('select', { 'aria-label': 'Detector' }, ['rules', 'payload ML', 'behavior', 'schema'].map(d => h('option', { value: d, selected: d === detector }, d)));
   const names = [...new URLSearchParams(ev.query).keys()], param = h('input', { value: names[0] || '', placeholder: 'any parameter', 'aria-label': 'Parameter' });
   const out = h('div', {});
   const cand = () => ({ prefix: prefix.value.trim(), param: param.value.trim(), detector: det.value, note: 'from event ' + ev.id });
@@ -128,7 +133,7 @@ function simSummary(s) {
 
 /* ---- views -------------------------------------------------------------------------------------- */
 const views = {}; let cleanup = null, badge = 0;
-const NAV = [['overview', 'Overview'], ['events', 'Events'], ['inbox', 'Learning Inbox'], ['policies', 'Policies'], ['simulator', 'Simulator'], ['threats', 'Threats'], ['alerts', 'Alerts'], ['settings', 'Settings'], ['evaluation', 'Evaluation']];
+const NAV = [['overview', 'Overview'], ['events', 'Events'], ['inbox', 'Learning Inbox'], ['policies', 'Policies'], ['simulator', 'Simulator'], ['apisec', 'API Security'], ['threats', 'Threats'], ['alerts', 'Alerts'], ['settings', 'Settings'], ['evaluation', 'Evaluation']];
 
 views.overview = async root => {
   let win = +(localStorage.win || 3600), live = true, lastId = 0, timer;
@@ -227,7 +232,7 @@ views.simulator = async root => {
   const cur = await gw('/exemptions'), mode = await gw('/mode'); let thr = mode.threshold, cands = [];
   const out = h('div', {}), val = h('b', {}, thr.toFixed(2)), list = h('div', {});
   const range = h('input', { type: 'range', min: .1, max: .95, step: .05, value: thr, 'aria-label': 'Candidate threshold', oninput: e => { thr = +e.target.value; val.textContent = thr.toFixed(2); } });
-  const f = { prefix: h('input', { placeholder: '/products/search', 'aria-label': 'Path prefix' }), param: h('input', { placeholder: 'parameter (optional)', 'aria-label': 'Parameter' }), det: h('select', { 'aria-label': 'Detector' }, ['rules', 'payload ML', 'behavior'].map(d => h('option', { value: d }, d))) };
+  const f = { prefix: h('input', { placeholder: '/products/search', 'aria-label': 'Path prefix' }), param: h('input', { placeholder: 'parameter (optional)', 'aria-label': 'Parameter' }), det: h('select', { 'aria-label': 'Detector' }, ['rules', 'payload ML', 'behavior', 'schema'].map(d => h('option', { value: d }, d))) };
   const drawCands = () => list.replaceChildren(...cands.map((c, i) => h('div', { class: 'row' }, h('span', { class: 'chip' }, `${c.detector} · ${c.prefix}${c.param ? ' · ' + c.param : ''}`), h('button', { class: 'btn sm', onclick: () => { cands.splice(i, 1); drawCands(); } }, 'Remove'))));
   let last;
   async function run() {
@@ -259,6 +264,15 @@ views.threats = async root => {
       h('div', {}, h('h3', {}, 'Risk over time'), s), h('div', {}, h('h3', {}, 'Story'), evs.slice(-40).reverse().map(e => h('div', { class: 'row', style: 'padding:5px 0;border-top:1px solid var(--line);cursor:pointer', onclick: () => openEvent(e.id) }, riskChip(e.risk, thr), h('span', { class: 'muted' }, clock(e.ts)), h('span', { class: 'mono grow', style: 'word-break:break-all' }, `${e.method} ${e.path}`), actionChip(e.action))))));
   };
   root.append(h('div', { class: 'card page' }, h('h2', {}, 'Clients by risk (last 24 h)'), table(['Client', 'Requests', 'Flagged', 'Max risk', 'Main signals', 'Last seen', ''], rows.map(r => ({ ip: r.ip, cells: [h('span', { class: 'mono' }, r.ip), r.requests, r.flagged, h('b', {}, r.max_risk.toFixed(2)), r.top.map(([d, n]) => h('span', { class: 'chip' }, `${d} ×${n}`)), h('span', { class: 'muted' }, ago(r.last_ts)), r.denied ? h('span', { class: 'chip bad' }, 'banned') : ''] })), r => timelineOf(r.ip))));
+};
+
+views.apisec = async root => {
+  const s = await gw('/schema');
+  if (!s.loaded) return root.append(h('div', { class: 'stack page' }, h('div', { class: 'card' }, h('h2', {}, 'No API schema loaded'), h('p', { class: 'muted', style: 'max-width:62ch' }, 'The schema detector flags requests that do not fit the API: unknown endpoints, parameters or methods, missing or mistyped fields, privileged fields such as role. Build one with: python -m wafgw.schema_learn --openapi <url> (or --dataset / --events), then restart the gateway.'))));
+  const kinds = Object.entries(s.findings_24h).sort((a, b) => b[1] - a[1]);
+  root.append(h('div', { class: 'stack page' },
+    h('div', { class: 'card' }, h('h2', {}, 'Schema findings, last 24 h'), kinds.length ? h('div', { class: 'stack' }, kinds.map(([k, n]) => h('div', {}, h('div', { class: 'row' }, h('span', {}, k.replace(/_/g, ' ')), h('span', { class: 'grow' }), h('b', {}, n)), bar(n / kinds[0][1])))) : h('p', { class: 'muted' }, 'No request broke the schema.')),
+    h('div', { class: 'card' }, h('h2', {}, `Known endpoints (${s.endpoints.length})`), table(['Endpoint', 'Method', 'Fields (required in bold)'], s.endpoints.flatMap(e => Object.entries(e.methods).map(([m, v]) => ({ cells: [h('span', { class: 'mono' }, e.endpoint), m, h('span', {}, v.open ? h('span', { class: 'chip' }, 'open body') : null, v.params.map(p => h('span', { class: 'chip' }, p.required ? h('b', {}, p.name) : p.name)))] })))))));
 };
 
 views.alerts = async root => {

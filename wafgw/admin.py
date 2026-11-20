@@ -2,6 +2,7 @@
 import hmac
 import ipaddress
 import time
+from collections import Counter
 
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -33,7 +34,8 @@ def build_admin(engine, store, token: str | None) -> Starlette:
 
     async def health(request):
         return JSONResponse({"status": "ok", "uptime_s": round(time.time() - START),
-                             "models": {"payload": engine.payload is not None, "behavior": engine.behavior is not None}})
+                             "models": {"payload": engine.payload is not None, "behavior": engine.behavior is not None,
+                                    "schema": engine.schema is not None}})
 
     async def stats(request):
         return JSONResponse({**store.stats(int(request.query_params.get("since", 3600))),
@@ -128,7 +130,18 @@ def build_admin(engine, store, token: str | None) -> Starlette:
             store.put("alerts", d.get("alerts", {}))
         return JSONResponse(policy_doc())
 
+    async def schema(request):
+        """Learned/declared API schema plus how often each kind of schema finding fired in the last 24 h."""
+        kinds = Counter()
+        for e in store.events(since=time.time() - 86400, limit=1000):
+            for r in e["reasons"]:
+                if r["detector"] == "schema":
+                    kinds.update(part.split(":")[0] for part in r["detail"].split("; "))
+        return JSONResponse({"loaded": engine.schema is not None, "findings_24h": dict(kinds),
+                             "endpoints": engine.schema.summary() if engine.schema else []})
+
     return Starlette(routes=[
+        Route("/api/schema", guarded(schema)),
         Route("/api/events/{id:int}", guarded(one_event)),
         Route("/api/feedback", guarded(feedback), methods=["GET", "POST"]),
         Route("/api/exemptions", guarded(exemptions), methods=["GET", "POST"]),

@@ -274,6 +274,30 @@ next feature. Leakage: a shape-only model scored AUC 0.93 inside training but 0.
 the in-training cross-validation (AUC 0.99) is inflated; quote CSIC only. Weak spot: held-out
 harmless text with heavy punctuation is still flagged too often (17-49% on two small sets).
 
+## API schema detection (5th detector)
+
+Positive security: learn what a normal request to each endpoint looks like (allowed methods,
+parameters, required fields, types, lengths, character classes) from clean traffic, or import an
+OpenAPI file, and flag what does not fit: unknown endpoint/method/parameter, missing required
+field, wrong type, length or charset outlier, privileged fields (`role`, `is_admin`, ...). A
+parameter counts as normal only if seen >= 5 times and in >= 0.5% of that endpoint's traffic, so a
+few attacks in the learning window do not poison it.
+
+```bash
+.venv/bin/python -m wafgw.schema_learn --openapi http://127.0.0.1:8000/openapi.json   # or --dataset / --events
+.venv/bin/python -m detection.run_schema --openapi http://127.0.0.1:8000/openapi.json
+```
+
+Held-out CSIC 2010 (learned on 4.8k normal requests, tested on 4.8k unseen normal + all 15.4k
+anomalies): schema alone 82.5% recall / 0.1% false alarms; rules + payload ML + schema 86.7% /
+0.3% (before: 23.9% / 0.1%). The 13.5k anomalies with no attack text: 80.5% (payload ML 9.9%). If
+the learning window has 5% anomalies mixed in, recall drops to 76.6%; at 20%, 53.7%. Demo API
+dataset: mass assignment 100%, 0 false alarms on 1.5k normal requests; the OpenAPI spec alone
+flags mass assignment and unknown fields with no learning. BOLA and brute force are not claimed.
+Caveats: CSIC is one synthetic shop (schema learning is unusually easy there); rarely visited
+pages false-alarm as unknown endpoints; the learning window must be clean. Not done: hot reload of
+`schema.json`, repeated-parameter check, exemptions per finding kind.
+
 ## Attacks covered
 
 SQL injection, XSS (stored), path traversal, mass assignment, BOLA/IDOR,
