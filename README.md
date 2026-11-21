@@ -191,6 +191,20 @@ from the n-grams. The first tokenizer also had a bug the CSIC misses exposed (a 
 quote swallow the injection after it). The harmless set was already spent when this was measured. Overall CSIC recall
 stays low because most CSIC attacks are structural (no attack text): that is the schema detector's job.
 
+### Head-to-head with Coraza + CRS (the BunkerWeb / ModSecurity engine)
+
+Held-out CSIC 2010, same requests for everyone (full table, caveats and how to reproduce: [docs/BENCHMARK.md](docs/BENCHMARK.md)):
+
+| detector | recall | false alarms on normal traffic |
+|---|---|---|
+| Coraza + CRS, paranoia 1 | 23.1% | 0.0% |
+| Coraza + CRS, paranoia 2 | 37.7% | 15.6% |
+| Coraza + CRS, paranoia 3 | 78.0% | 71.1% |
+| our rules + payload model (no app learning) | 28.5% | 0.1% |
+| **ours: rules + payload model + schema** | **87.4%** | **0.3%** |
+
+The schema detector learns the application, which CRS cannot; without it we are only slightly ahead of CRS level 1. SQLi/XSS/traversal: ours 100%, CRS level 1 86% on SQLi.
+
 ### Behavior model (AI model #2)
 
 Unsupervised, no labels: for each request it summarises what that client did in the last 60 s
