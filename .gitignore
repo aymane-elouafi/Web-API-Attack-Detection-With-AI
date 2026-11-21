@@ -6,3 +6,4 @@ models/
 data/waf.db*
 data/external/*
 !data/external/SOURCES.md
+data/reports/
