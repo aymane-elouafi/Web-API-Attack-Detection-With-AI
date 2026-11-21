@@ -43,6 +43,17 @@ def build_admin(engine, store, token: str | None, cfg: dict | None = None) -> St
         return JSONResponse({**store.stats(int(request.query_params.get("since", 3600))),
                              "mode": engine.mode, "threshold": engine.threshold})
 
+    async def metrics(request):
+        """Prometheus text format, read from the shared database so it covers every worker process."""
+        # shortcut: counts scan the events table on each scrape; fine for millions of rows at a 15 s interval, add a counter table beyond that
+        counts = store.stats(10**9)["by_action"]
+        lat = store.stats(300)["latency_ms"]
+        lines = ["# TYPE waf_requests_total counter"] + [f'waf_requests_total{{action="{a}"}} {n}' for a, n in sorted(counts.items())]
+        lines += ["# TYPE waf_inspection_latency_ms gauge"] + [f'waf_inspection_latency_ms{{quantile="{q}"}} {lat[q]}' for q in ("p50", "p95")]
+        lines += ["# TYPE waf_blocking_mode gauge", f"waf_blocking_mode {int(engine.mode == 'block')}",
+                  "# TYPE waf_uptime_seconds gauge", f"waf_uptime_seconds {round(time.time() - START)}"]
+        return PlainTextResponse("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
+
     async def events(request):
         q = request.query_params
         return JSONResponse({"events": store.events(
@@ -267,6 +278,7 @@ def build_admin(engine, store, token: str | None, cfg: dict | None = None) -> St
         Route("/api/policy", guarded(policy), methods=["GET", "POST"]),
         Route("/api/health", health),
         Route("/api/stats", guarded(stats)),
+        Route("/metrics", guarded(metrics)),
         Route("/api/events", guarded(events)),
         Route("/api/mode", guarded(mode), methods=["GET", "POST"]),
         Route("/api/lists", guarded(lists), methods=["GET", "POST"]),

@@ -87,6 +87,7 @@ Tables `lists(ip, kind allow|deny, note, created)` and `settings(key, value JSON
 | `GET /api/health` | no auth. `{status, uptime_s, models:{payload,behavior,schema}, reload_errors}` |
 | `POST /api/reload` | re-read changed model files and the stored policy now: `{reloaded:[...], errors:{file:msg}, mode, threshold}` |
 | `GET /api/stats?since=3600` | `{window_s, total, avg_risk, by_action, latency_ms:{p50,p95,max}, top_ips, top_paths, timeline[{t,requests,flagged}], mode, threshold}` |
+| `GET /metrics` | Prometheus text: `waf_requests_total{action}`, `waf_inspection_latency_ms{quantile}`, `waf_blocking_mode`, `waf_uptime_seconds`. Same bearer token (Prometheus `authorization` block). Read from the shared database, so it covers all worker processes. |
 | `GET /api/events` | filters: `since` (unix ts), `action`, `ip`, `path` (substring), `min_risk`, `before_id` (paging), `limit` (<=1000). Newest first, `detectors`/`reasons` already parsed |
 | `GET /api/mode`, `POST /api/mode` | `{"mode":"monitor\|block","threshold":0.5}` (either key optional); persisted |
 | `GET /api/lists`, `POST /api/lists` | `{"ip":"1.2.3.4 or 10.0.0.0/8","kind":"allow\|deny","note":""}` |

@@ -48,6 +48,14 @@ class ConsoleTests(unittest.TestCase):
             self.store.log(e)
         self.store.flush()
 
+    def test_metrics_endpoint_needs_the_token_and_exports_prometheus_text(self):
+        self.put(event(1))
+        admin = TestClient(build_admin(self.engine, self.store, "t0ken"))
+        self.assertEqual(admin.get("/metrics").status_code, 401)
+        r = admin.get("/metrics", headers={"authorization": "Bearer t0ken"})
+        self.assertIn("# TYPE waf_requests_total counter", r.text)
+        self.assertIn('waf_requests_total{action="', r.text)
+
     def test_explain_shows_evidence_and_threshold(self):
         self.put(event(1))
         x = self.client.get("/api/explain/1").json()
