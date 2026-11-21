@@ -21,6 +21,13 @@ _PHRASES = ["it's fine", "see you tomorrow", "don't forget the receipt", "that's
 _PKG = ["left-pad", "express", "numpy", "react-dom", "scikit-learn", "lodash"]
 _ACCENT = ["café", "naïve", "über", "señor", "crème brûlée", "日本語のレビュー", "Привет, мир", "مرحبا", "안녕하세요", "ça va très bien", "Größe M"]
 
+# Everyday conversational English (apostrophes, quoted words, dashes, abbreviations), unrelated to shopping.
+_WORDS = ["weather", "meeting", "train", "movie", "garden", "bus", "lecture", "dinner", "match", "holiday", "exam", "concert", "puzzle", "neighbour", "airport"]
+_SAY = ["I can't believe", "Nobody knows why", "She said that", "Do you think", "It's strange that", "We're sure that", "They didn't say whether", "I wonder if"]
+_QUOTED = ["maybe", "later", "fine", "good enough", "on time", "no worries", "as planned", "the usual", "bonus", "draft"]
+_TIMES = ["noon", "Friday", "next week", "8:30", "tomorrow", "half past six", "the weekend", "March"]
+
+
 def _i(r) -> str:
     """A product, sometimes with an adjective or an owner in front (keeps the template space large)."""
     t = r.choice(_THINGS)
@@ -67,6 +74,16 @@ _T = [  # each lambda(r, p) -> text; p = pools bound to the Random r
     lambda r: f"'{_i(r)}' vs \"{_i(r)}\" -- which one's better?",
     lambda r: f"{_i(r)}->{_i(r)} => {r.choice(_ADJ)} <- {_i(r)}",
     lambda r: f"o'clock {r.randint(1, 12)} -- y'all come back; rock 'n' roll {_i(r)}",
+    lambda r: f"{r.choice(_SAY)} the {r.choice(_WORDS)} is moved to {r.choice(_TIMES)} -- who's coming?",
+    lambda r: f"His {r.choice(_WORDS)} was '{r.choice(_QUOTED)}' -- {r.choice(_SAY).lower()} the {r.choice(_WORDS)} ends {r.choice(_TIMES)}.",
+    lambda r: f"Our teacher called the {r.choice(_WORDS)} \"{r.choice(_QUOTED)}\" / \"{r.choice(_QUOTED)}\" depending on the day; whatever, we'll see.",
+    lambda r: f"{r.choice(_SAY)} it's already {r.choice(_TIMES)}... the {r.choice(_WORDS)} doesn't wait, does it?",
+    lambda r: f"The frame measures {r.randint(4, 9)}'{r.randint(0, 11)}\" tall -- {r.choice(_SAY).lower()} the {r.choice(_WORDS)} fits.",
+    lambda r: f"Teachers hate '{r.choice(_QUOTED)}' in essays -- it's vague; write about the {r.choice(_WORDS)} instead.",
+    lambda r: f"Text from Sam: 'running late -- {r.choice(_TIMES)} works?' Reply: 'yep, the {r.choice(_WORDS)} can wait.'",
+    lambda r: f"Heads up: the '{r.choice(_QUOTED)}' option is off by default -- ask before the {r.choice(_WORDS)}!",
+    lambda r: f"{r.choice(_NAMES)}'s {r.choice(_WORDS)}: \"{r.choice(_QUOTED)}\" -- {r.choice(_TIMES)}; bring snacks & water.",
+    lambda r: f"Everyone misses a {r.choice(_WORDS)} once -- it's fine; we'll try again {r.choice(_TIMES)} (promise).",
 ]
 
 

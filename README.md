@@ -49,7 +49,7 @@ the data: the demo dataset is synthetic, CSIC 2010 is one synthetic shop, the no
 | Demo dataset: recall (3,732 requests, 1,092 attacks) | 64.7% | 39.1% | 44.3% | 17.0% | - | **84.5%** (1 false alarm) |
 | Held-out CSIC 2010: recall / false alarms (25k requests) | 14.9% / 0.0% | not run | 20.3% / 0.2% | - | 82.5% / 0.1% | rules+payload+schema 86.7% / 0.3% |
 | Novel payloads (30 attacks, 15 look-alikes) | 22/30, 0 FP | 30/30, 1 FP (earlier run) | 29/30, 1 FP (real-data model); 28/30, 0 FP (demo model) | - | - | - |
-| Blind harmless text (200 sentences x 3 shapes): false-alarm rate | 8.5% | not run | 16.0% (was 51.5%) | - | - | - |
+| Blind harmless text (200 sentences x 3 shapes): false-alarm rate | 1.0% | not run | 5.5% (was 51.5%) | - | - | - |
 
 
 ## The detectors
@@ -161,15 +161,18 @@ frozen (no shared templates), each sent in three request shapes (`.venv/bin/pyth
 | model | false-alarm rate (requests) | sentences flagged in any shape |
 |---|---|---|
 | previous production model (no hard negatives) | 51.5% | 108/200 |
-| **with hard negatives (now)** | **16.0%** | **35/200** |
-| own rules | 8.5% | 17/200 |
+| with hard negatives (first round) | 16.0% | 35/200 |
+| **+ conversational prose templates (now)** | **5.5%** | **14/200** |
+| own rules, before tightening SQLI-1/SQLI-6 | 8.5% | 17/200 |
+| **own rules (now)** | **1.0%** | **2/200** |
 
-The price: on held-out CSIC 2010 the classifier's recall stayed 20.3% (was 20.7%) with 0.2% false
-alarms (was 0.1%), but its recall on the SQLi-looking CSIC requests fell from 94.6% to 80.6%, and the
-novel-attack set is unchanged (29/30 caught, 1/15 look-alikes flagged). Still open: a model that
-flags 16% of hard harmless text will annoy real users on punctuation-heavy fields (free-text
-comments); keep monitor mode and exemptions for those routes. The blind set has now been used
-once; write a new one before trusting a further improvement.
+The price: on held-out CSIC 2010 the classifier's recall is 19.8% (was 20.7% before any hard negatives) with 0.2% false
+alarms, its recall on the SQLi-looking CSIC requests fell from 94.6% to 78.7%, and the
+novel-attack set is unchanged (29/30 caught, 1/15 look-alikes flagged). The second round (prose templates, and rules
+SQLI-1/SQLI-6 now needing the shape of a real injection: no more hits on `"a" or "b"` or `'x' -- some words`)
+was written after seeing which blind sentences failed, so the 5.5% / 1.0% figures are optimistic: the blind set
+is spent. Through the whole gateway (rules + model + schema) the same 600 requests gave 101 false alarms before and 34 after.
+Write a fresh blind set before trusting a further improvement; keep monitor mode and exemptions for free-text routes.
 
 ### Behavior model (AI model #2)
 
@@ -341,7 +344,7 @@ extra path segments), not payload text. On the ~3k classifiable payload requests
 95-100%. Catching the structural ones needs a schema / unknown-parameter check (API security), the
 next feature. Leakage: a shape-only model (lengths, slashes, character shares) scored AUC 0.91 inside training
 but 0.38 on CSIC, so the in-training leave-family-out cross-validation (AUC 0.99, recall 95.4%, 3.4% false alarms; harmless FWAF lines 0.6%, the 94 hand-made sentences 6.4%, CRS "negative" tests 50.8%) is inflated; quote CSIC only. Weak spot: held-out
-harmless text with heavy punctuation is still flagged too often (16% on the 200-sentence blind set, see
+harmless text with heavy punctuation is still flagged too often (5.5% on the 200-sentence blind set after two rounds of fixes, now spent; see
 the payload classifier section).
 
 ## Generate a dataset

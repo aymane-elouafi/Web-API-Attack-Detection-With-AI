@@ -25,6 +25,15 @@ class SignatureTests(unittest.TestCase):
         self.assertGreaterEqual(score(q("'/**/oR/**/1=1/**/--")), THRESHOLD)
         self.assertGreaterEqual(score(q("' uNiOn SeLeCt 1,2,3 --")), THRESHOLD)
 
+    def test_sql_tautology_and_comment_variants_are_still_flagged(self):
+        for payload in ["\" OR \"\"=\"", "') or ('a'='a", "x' or true--", "' OR 'x' LIKE 'x", "admin'-- -", "1' -- "]:
+            self.assertGreaterEqual(score(q(payload)), THRESHOLD, payload)
+
+    def test_prose_with_quotes_and_dashes_is_not_flagged(self):
+        for text in ["His nickname was 'Big Al' -- nobody knows why.", 'Is it "affect" or "effect"?',
+                     "She's 5'7\" -- quite tall.", "'colour' or 'color' -- pick one"]:
+            self.assertLess(score(q(text)), THRESHOLD, text)
+
     def test_xss_is_flagged(self):
         for payload in ["<script>alert(1)</script>", "<img src=x onerror=alert(1)>",
                         "<svg/onload=alert(1)>", "<a href=\"javascript:alert(1)\">x</a>"]:

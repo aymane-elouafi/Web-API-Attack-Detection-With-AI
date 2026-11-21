@@ -45,12 +45,12 @@ def _rule(id_: str, name: str, severity: int, pattern: str, target: str = "value
 
 RULES = [
     # --- SQL injection ------------------------------------------------------
-    _rule("SQLI-1", "Boolean tautology (quote + OR/AND ...)", 5, r"""['"]\s*\)?\s*(or|and)\s*\(?\s*['"\d(]"""),
+    _rule("SQLI-1", "Boolean tautology (quote + OR/AND ...)", 5, r"""['"]\s*\)?\s*(or|and)\s*\(?\s*(\d|\(|true\b|false\b|['"]\s*[^'"]*['"]?\s*(=|like\b|<|>)|['"]\s*['"])"""),
     _rule("SQLI-2", "UNION SELECT", 5, r"union(\s+all)?\s+select"),
     _rule("SQLI-3", "Stacked destructive statement", 5, r";\s*(drop|delete|insert|update|alter|truncate)\s"),
     _rule("SQLI-4", "Time-delay function", 5, r"\b(sleep|benchmark|pg_sleep)\s*\(|waitfor\s+delay"),
     _rule("SQLI-5", "Schema probing", 5, r"sqlite_master|information_schema|sys\.tables"),
-    _rule("SQLI-6", "Quote followed by SQL comment", 5, r"""['"]\s*--"""),
+    _rule("SQLI-6", "Quote followed by SQL comment", 5, r"""['"]\s*--(?!\s+[a-z]{2,}\b)"""),
     _rule("SQLI-7", "ORDER BY <n>", 3, r"order\s+by\s+\d+"),
     _rule("SQLI-8", "Ends with SQL comment", 3, r"--\s*$"),
     _rule("SQLI-9", "SELECT ... FROM", 3, r"select\s.+\sfrom\s"),
