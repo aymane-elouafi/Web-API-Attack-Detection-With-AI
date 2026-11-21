@@ -301,3 +301,10 @@ summary to the Alerts webhook. At most the newest 20,000 flagged events are anal
 The console adds **Incidents** and **Reports** pages (`dashboard/static/incidents.js`) and two routes:
 `/api/report-html?window_h=24[&download=1]` renders the report from the gateway's JSON, `/api/report-file/{name}`
 serves a saved one.
+
+## SIEM export
+
+`[siem]` in `waf.toml`: `file` appends one JSON object per event (the same fields as the events table) and `syslog = "host:port"`
+sends the event as CEF over UDP syslog (Splunk, QRadar, ArcSight, Sentinel and Elastic parse CEF). By default only blocked and
+would-block events are sent (`only_flagged = false` sends everything). Every worker process exports its own events. UDP can lose
+messages; use the file plus a forwarder when that matters. An unreachable SIEM never affects traffic.

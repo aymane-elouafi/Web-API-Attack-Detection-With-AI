@@ -51,6 +51,7 @@ class Store:
                 if col not in have:
                     self._db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
         self._db.commit()
+        self.siem = None                                  # set by the gateway when [siem] is configured
         self._queue: queue.Queue = queue.Queue()
         self.refresh_lists()
         self.exemption_cache = self.exemptions()          # read on every request by the engine, so kept in memory
@@ -89,6 +90,9 @@ class Store:
                     self._db.commit()
             except sqlite3.Error:
                 pass  # shortcut: a failed log write is dropped, never allowed to hurt traffic
+            if self.siem:
+                for e in batch:
+                    self.siem.emit(e)
             for _ in batch:
                 self._queue.task_done()
 

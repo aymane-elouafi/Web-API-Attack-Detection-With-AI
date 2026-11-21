@@ -76,3 +76,8 @@ model = ""
 api_key_env = ""                  # NAME of the environment variable holding the key (the key itself never goes in this file)
 timeout_s = 20
 send_ip = false                   # true: send the full client IP instead of 203.0.113.x
+
+[siem]            # ship events to a SIEM (both optional)
+file = ""         # JSON lines, e.g. "data/siem.jsonl" (tail it with Filebeat / Splunk forwarder)
+syslog = ""       # CEF over UDP syslog, e.g. "10.0.0.5:514"
+only_flagged = true   # false = every request, not just blocked / would-block

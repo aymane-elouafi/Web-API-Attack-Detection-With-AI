@@ -21,6 +21,7 @@ DEFAULTS = {
     "coraza": {"enabled": False, "url": "http://127.0.0.1:8081", "timeout_s": 1.0},
     "reports": {"enabled": False, "dir": "data/reports", "every_h": 24, "window_h": 24, "webhook": False},
     "explainer": {"enabled": False, "url": "", "format": "openai", "model": "", "api_key_env": "", "timeout_s": 20, "send_ip": False},
+    "siem": {"file": "", "syslog": "", "only_flagged": True},
     "routes": [],
 }
 

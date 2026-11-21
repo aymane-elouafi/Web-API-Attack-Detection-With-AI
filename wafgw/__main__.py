@@ -12,6 +12,7 @@ from wafgw import config, report
 from wafgw.admin import build_admin
 from wafgw.engine import Engine
 from wafgw.proxy import build_app
+from wafgw.siem import Siem
 from wafgw.store import Store
 
 
@@ -70,6 +71,7 @@ def worker_main(cfg: dict, parent: int) -> None:
     sock.bind(_addr(cfg["proxy"]["listen"]))
     sock.listen(2048)
     store = Store(cfg["store"]["path"])
+    store.siem = siem(cfg)
     engine = Engine(cfg, store)
 
     async def serve() -> None:
@@ -79,6 +81,10 @@ def worker_main(cfg: dict, parent: int) -> None:
     run_loop(serve())
 
 
+def siem(cfg: dict):
+    return Siem(cfg["siem"]) if cfg["siem"]["file"] or cfg["siem"]["syslog"] else None
+
+
 async def run(cfg: dict) -> None:
     n = cfg["proxy"]["workers"]
     if n > 1:                                   # fork BEFORE any thread exists (the Store starts one)
@@ -86,6 +92,7 @@ async def run(cfg: dict) -> None:
         for _ in range(n):
             multiprocessing.get_context("fork").Process(target=worker_main, args=(cfg, os.getpid()), daemon=True).start()
     store = Store(cfg["store"]["path"])
+    store.siem = siem(cfg)
     engine = Engine(cfg, store)
     if engine.payload is None or engine.behavior is None:
         print("warning: AI models missing in %s (run: python -m wafgw.train); rules only" % cfg["models"]["dir"], file=sys.stderr)
