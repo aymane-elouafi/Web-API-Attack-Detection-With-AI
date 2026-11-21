@@ -53,7 +53,8 @@ class Behavior:
         # sklearn's per-sample scoring costs ~10 ms; walking plain Python lists of the same trees is ~0.3 ms
         self.trees = [(t.children_left.tolist(), t.children_right.tolist(), t.feature.tolist(), t.threshold.tolist(),
                        [_c(n) for n in t.n_node_samples]) for t in (e.tree_ for e in forest.estimators_)]
-        self.hist: dict[str, deque] = defaultdict(deque)
+        # shortcut: only the last 500 requests per client are kept, so one very busy IP cannot make every request slower; raise if windows need more
+        self.hist: dict[str, deque] = defaultdict(lambda: deque(maxlen=500))
         self.owners: dict[str, set] = defaultdict(set)    # order path -> sessions that requested it
         self.max_clients, self.calls = max_clients, 0
 

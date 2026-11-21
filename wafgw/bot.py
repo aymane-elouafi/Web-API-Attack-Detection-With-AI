@@ -39,7 +39,8 @@ def _combine(parts: list[tuple[str, float, str]]) -> tuple[float, str]:
 class BotDetector:
     def __init__(self, window: float = WINDOW, max_clients: int = 10_000):
         self.window, self.max_clients, self.calls = window, max_clients, 0
-        self.hist: dict[str, deque] = defaultdict(deque)     # ip -> [ts, path, status, has_credential]
+        # shortcut: only the last 500 requests per client are kept, so one very busy IP cannot make every request slower; raise if windows need more
+        self.hist: dict[str, deque] = defaultdict(lambda: deque(maxlen=500))     # ip -> [ts, path, status, has_credential]
 
     # --- one request -----------------------------------------------------------------------------
     def inspect(self, info: dict) -> tuple[float, str, list | None]:

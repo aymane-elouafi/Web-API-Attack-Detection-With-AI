@@ -205,6 +205,8 @@ Held-out CSIC 2010, same requests for everyone (full table, caveats and how to r
 
 The schema detector learns the application, which CRS cannot; without it we are only slightly ahead of CRS level 1. SQLi/XSS/traversal: ours 100%, CRS level 1 86% on SQLi.
 
+First load test (single gateway process, shared laptop): about 330 req/s and +6 ms at low load; far below enterprise WAFs. Numbers, caveats and next steps: [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
+
 ### Behavior model (AI model #2)
 
 Unsupervised, no labels: for each request it summarises what that client did in the last 60 s
