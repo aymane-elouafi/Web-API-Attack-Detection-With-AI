@@ -134,7 +134,9 @@ def build_app(cfg: dict, engine: Engine, store: Store, client: httpx.AsyncClient
             return True
 
         try:
-            fits = await asyncio.wait_for(read_body(), p["body_timeout_s"])   # slow-body (slowloris-style) clients
+            # a plain GET (no content-length, no chunked body) has nothing to wait for: skip the timeout machinery
+            fits = True if declared == "0" and "transfer-encoding" not in request.headers else \
+                await asyncio.wait_for(read_body(), p["body_timeout_s"])   # slow-body (slowloris-style) clients
         except asyncio.TimeoutError:
             return JSONResponse({"error": "request body timeout", "request_id": rid}, 408)
         if not fits:
