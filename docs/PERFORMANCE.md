@@ -40,6 +40,7 @@ mode, threshold, routes and exemptions from it every 2 s. A ban or a setting cha
 detector's history and the stateful rules. The kernel spreads *new connections* over workers, so one client's requests can land
 on several. Keep-alive clients stay on one worker, which hides it; a client opening a new connection per request is seen as N
 partial clients: its rate limit becomes up to N times looser and burst / URL-walking detection gets less sensitive.
+The console's bot table (`/api/bots`) is read from the main process, which handles no traffic, so it is empty with more than one worker.
 Fixing that needs shared state (Redis) or routing by client IP; with one worker (the default) nothing changes.
 
 ## Measurement mistakes found on the way (kept so nobody repeats them)

@@ -11,6 +11,7 @@ import uvicorn
 from wafgw import config, report
 from wafgw.admin import build_admin
 from wafgw.engine import Engine
+from wafgw.guard import Guards
 from wafgw.proxy import build_app
 from wafgw.siem import Siem
 from wafgw.store import Store
@@ -97,6 +98,8 @@ async def run(cfg: dict) -> None:
     if engine.payload is None or engine.behavior is None:
         print("warning: AI models missing in %s (run: python -m wafgw.train); rules only" % cfg["models"]["dir"], file=sys.stderr)
     servers = []
+    if n > 1:
+        engine.guards = Guards(cfg, store)       # single-process mode gets this from build_app; the admin API reads/writes these settings
     if n <= 1:
         servers.append(uvicorn.Server(proxy_config(cfg, build_app(cfg, engine, store))))
     try:
