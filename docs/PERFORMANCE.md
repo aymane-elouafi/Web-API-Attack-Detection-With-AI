@@ -60,6 +60,8 @@ Per-request work in the behavior features and the bot detector looped over a cli
 ## Next steps toward real throughput
 
 1. Shared state across workers (Redis, or routing a client to one worker) so rate limits and behavior windows are exact.
-2. `uvloop` + `httptools` for the HTTP layer (not installed; typically a large cut of the per-request cost). A single process
-   spends about 4 ms per request on real sockets, of which detection is about 0.7 ms and the httpx call to the upstream about 0.4 ms.
+2. `uvloop` + `httptools` are now installed and used automatically (set `WAFGW_NO_UVLOOP=1` to turn the loop off). Measured as gateway CPU
+   time per request on a busy laptop (A/B, two runs each): 5.9 ms with uvloop vs 6.3 ms without, about 7%. Not the big win hoped for:
+   the time goes into Python code per request (Starlette, httpx to the upstream, detection about 0.7 ms, logging), not into the event loop.
+   Next: replace httpx with a leaner upstream client, and trim per-request allocations.
 3. Consider moving the data plane to a compiled proxy (Go or Rust) and keeping Python only for scoring.

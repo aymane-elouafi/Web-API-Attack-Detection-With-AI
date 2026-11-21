@@ -15,6 +15,17 @@ from wafgw.proxy import build_app
 from wafgw.store import Store
 
 
+def run_loop(coro) -> None:
+    """asyncio.run, on uvloop when installed (uvicorn picks its HTTP parser itself, but not the loop we are already inside)."""
+    try:
+        if os.environ.get("WAFGW_NO_UVLOOP"):
+            raise ImportError
+        import uvloop
+    except ImportError:
+        return asyncio.run(coro)
+    uvloop.run(coro)
+
+
 def _addr(listen: str) -> tuple[str, int]:
     host, _, port = listen.rpartition(":")
     return host or "0.0.0.0", int(port)
@@ -65,7 +76,7 @@ def worker_main(cfg: dict, parent: int) -> None:
         server = uvicorn.Server(proxy_config(cfg, build_app(cfg, engine, store)))
         await asyncio.gather(watch_models(engine), sync_state(engine, store, parent), server.serve(sockets=[sock]))
 
-    asyncio.run(serve())
+    run_loop(serve())
 
 
 async def run(cfg: dict) -> None:
@@ -95,7 +106,7 @@ async def run(cfg: dict) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default=None)
-    asyncio.run(run(config.load(ap.parse_args().config)))
+    run_loop(run(config.load(ap.parse_args().config)))
 
 
 if __name__ == "__main__":
