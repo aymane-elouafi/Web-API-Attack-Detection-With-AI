@@ -1,0 +1,56 @@
+/* Incidents + Reports pages. Same tokens as style.css; loaded after it. */
+.sev{font-weight:640;text-transform:capitalize}
+.sev-critical{background:var(--bad);color:#fff}
+.sev-high{background:color-mix(in srgb,var(--bad) 16%,transparent);color:var(--bad)}
+.sev-medium{background:color-mix(in srgb,var(--warn) 17%,transparent);color:var(--warn)}
+.sev-low{background:var(--fill);color:var(--mute)}
+.inc-tools{display:flex;gap:var(--s3);align-items:center;flex-wrap:wrap}
+.inc-tools input[type=search]{flex:1 1 200px;max-width:320px}
+.sev-filter{display:flex;gap:var(--s2);flex-wrap:wrap}
+.sev-filter button{font:inherit;font-size:.8125rem;font-weight:540;color:var(--ink-2);background:var(--fill);border:0;border-radius:980px;height:32px;padding:0 var(--s3);cursor:pointer;transition:background .15s var(--ease),transform .1s var(--ease)}
+.sev-filter button:active{transform:scale(.96)}
+.sev-filter button[aria-pressed=true]{background:var(--ink);color:var(--bg)}
+.sev-filter button:focus-visible,.inc-row:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.inc-list{display:flex;flex-direction:column;gap:var(--s2)}
+.inc-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:var(--s3) var(--s4);align-items:center;background:var(--surface);box-shadow:var(--e1);border-radius:var(--r-md);padding:var(--s4);cursor:pointer;transition:background .15s var(--ease),transform .1s var(--ease)}
+.inc-row:hover{background:color-mix(in srgb,var(--surface) 92%,var(--ink))}
+.inc-row:active{transform:scale(.996)}
+.inc-title{font-weight:600;letter-spacing:-.01em;overflow-wrap:anywhere}
+.inc-meta{font-size:.8125rem;margin:2px 0 var(--s2)}
+.inc-side{display:flex;flex-direction:column;align-items:flex-end;gap:2px;text-align:right}
+.inc-risk{font-variant-numeric:tabular-nums;font-weight:600;font-size:1.125rem;letter-spacing:-.02em}
+.callout{padding:var(--s3) var(--s4);border-radius:var(--r-sm);background:var(--fill);border-left:3px solid var(--mute);font-size:.9375rem}
+.callout.bad{border-color:var(--bad);background:color-mix(in srgb,var(--bad) 9%,transparent)}
+.callout.good{border-color:var(--good);background:color-mix(in srgb,var(--good) 9%,transparent)}
+.story p{margin:0 0 var(--s2);line-height:1.5;max-width:68ch}
+.tl{position:relative;margin:0;padding:0 0 0 22px;list-style:none}
+.tl::before{content:"";position:absolute;left:5px;top:8px;bottom:8px;width:2px;background:var(--fill-2);border-radius:2px}
+.tl-step{position:relative;padding:var(--s2) 0 var(--s3);cursor:pointer;border-radius:var(--r-sm)}
+.tl-step::before{content:"";position:absolute;left:-22px;top:15px;width:12px;height:12px;border-radius:50%;background:var(--surface);box-shadow:0 0 0 2px var(--mute)}
+.tl-step.bad::before{box-shadow:0 0 0 2px var(--bad);background:var(--bad)}
+.tl-step.warn::before{box-shadow:0 0 0 2px var(--warn)}
+.tl-step:hover .mono{text-decoration:underline}
+.tl-step:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.tl-time{font-size:.75rem;color:var(--mute);font-variant-numeric:tabular-nums}
+.tl-ev{font-size:.75rem;color:var(--mute);overflow-wrap:anywhere}
+.refs{display:grid;grid-template-columns:max-content 1fr;gap:var(--s1) var(--s3);align-items:baseline;font-size:.8125rem}
+.refs dt{color:var(--mute)}.refs dd{margin:0}
+.ai-note{font-size:.75rem;color:var(--mute)}
+.rep-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:var(--s3)}
+.rep-kpis div{background:var(--fill);border-radius:var(--r-md);padding:var(--s3) var(--s4)}
+.rep-kpis b{display:block;font-size:1.5rem;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.rep-kpis span{font-size:.75rem;color:var(--mute)}
+.rep-actions{display:flex;gap:var(--s2);flex-wrap:wrap}
+.rec-list{margin:0;padding-left:1.2em}.rec-list li{margin:var(--s1) 0;max-width:68ch}
+@media (max-width:640px){
+  .inc-row{grid-template-columns:auto minmax(0,1fr)}
+  .inc-side{grid-column:1/-1;flex-direction:row;align-items:center;justify-content:space-between}
+  .tl-step{padding-block:var(--s3)}
+  .sev-filter button{height:44px}
+}
+@media (prefers-reduced-motion:reduce){.inc-row,.sev-filter button{transition:none}.inc-row:active,.sev-filter button:active{transform:none}}
+@media (prefers-contrast:more){.inc-row{box-shadow:0 0 0 1px var(--ink-2)}.callout{border-width:4px}}
+a.btn{text-decoration:none}
+.cmd code{white-space:pre-wrap;overflow-wrap:anywhere}
+.inc-row{align-items:start}.inc-row>.sev{margin-top:2px}.inc-side{align-self:center}
+.inc-row .chip{max-width:100%}

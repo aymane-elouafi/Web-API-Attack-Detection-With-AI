@@ -1,0 +1,8 @@
+.git
+.venv
+**/__pycache__
+data/external
+data/waf.db*
+models
+tests
+docs

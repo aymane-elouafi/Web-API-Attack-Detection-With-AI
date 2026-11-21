@@ -1,0 +1,4 @@
+cidr,country,asn,org
+192.0.2.0/24,ZZ,64500,Example Hosting
+198.51.100.0/24,YY,64501,Example Transit
+203.0.113.0/24,XX,64502,Example Telecom

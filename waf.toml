@@ -27,6 +27,23 @@ enabled = false
 rate_per_s = 20                   # sustained requests per second per client IP
 burst = 40
 
+[coraza]                          # optional 6th detector: Coraza+CRS side-car started with INSPECT_ONLY=1
+enabled = false                   # (docker compose --profile coraza sets WAFGW_CORAZA_URL, which also enables it)
+url = "http://127.0.0.1:8081"
+timeout_s = 1.0                   # side-car too slow or down: the request is still judged by the other detectors
+
+[response]                        # leak protection on what the application sends back (text/JSON only, bounded)
+enabled = true
+action = "alert"                  # alert = log only; redact = hide secrets/cards/keys; block = 502 page. Redact/block apply in block mode only
+max_inspect_bytes = 65536         # only the first 64 KB of a response is buffered and scanned (worst case ~50 ms); bigger bodies keep streaming
+types = ["text/", "application/json", "application/xml", "application/javascript"]
+
+[honeypots]                       # paths answered by the gateway itself with fakes; a hit is a near-certain attacker
+enabled = true
+ban_minutes = 30                  # auto-ban the client IP (block mode only); 0 = never
+canary = true                     # fake credentials in the honeypots; seeing one in a later request raises 'canary_used'
+paths = ["/admin.bak", "/.env", "/.git/config", "/wp-login.php", "/phpmyadmin", "/api/internal", "/backup.sql"]
+
 [store]
 path = "data/waf.db"
 
@@ -42,3 +59,19 @@ disabled = true
 # prefix = "/login"
 # mode = "block"
 # threshold = 0.4
+
+[reports]                         # scheduled security reports (HTML + JSON files); the console can also write one on demand
+enabled = false
+dir = "data/reports"
+every_h = 24
+window_h = 24                     # how far back each report looks
+webhook = false                   # also send a summary to the alert webhook (console > Alerts)
+
+[explainer]                       # OPTIONAL LLM narrative for incidents. Off by default; nothing is sent unless enabled = true.
+enabled = false                   # Sends only computed facts (technique names, counts, outcome); never bodies, headers or full IPs.
+url = ""                          # any OpenAI- or Anthropic-compatible endpoint, e.g. "http://127.0.0.1:20128" (a local gateway)
+format = "openai"                 # openai | anthropic
+model = ""
+api_key_env = ""                  # NAME of the environment variable holding the key (the key itself never goes in this file)
+timeout_s = 20
+send_ip = false                   # true: send the full client IP instead of 203.0.113.x

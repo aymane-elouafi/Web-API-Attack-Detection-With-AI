@@ -1,18 +1,35 @@
-# WAF gateway image: reverse proxy + engine + admin API. The AI models are trained at build time
-# from data/dataset.csv, so the image is self-contained.
-FROM python:3.12-slim
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
-RUN pip install --no-cache-dir starlette uvicorn httpx pandas scikit-learn joblib
+# One Dockerfile, two images:
+#   --target gateway  WAF gateway + admin API + management console (same image, different command)
+#   --target target   the intentionally vulnerable demo API (never expose it)
+FROM python:3.12-slim AS base
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /app
+RUN useradd --system --uid 10001 waf
+
+FROM base AS target
+RUN pip install fastapi uvicorn
+COPY common common
+COPY target_api target_api
+USER waf
+EXPOSE 8000
+CMD ["uvicorn", "target_api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+
+FROM base AS gateway
+COPY requirements.txt .
+RUN pip install -r requirements.txt
 COPY detection detection
 COPY traffic/__init__.py traffic/payloads.py traffic/
 COPY wafgw wafgw
+COPY dashboard dashboard
 COPY waf.toml .
-COPY data/dataset.csv data/dataset.csv
-RUN python -m wafgw.train --data data/dataset.csv --out models \
- && useradd --system --uid 10001 waf && mkdir /var/lib/wafgw && chown waf /var/lib/wafgw
+COPY docker/entrypoint.sh /entrypoint.sh
+COPY data/dataset.csv data/predictions_*.csv data/
+# Models are baked in (synthetic data only: data/external is not shipped). The models volume starts from these;
+# for the stronger real-data models, train on the host and copy models/ into the volume (docs/DEPLOYMENT.md).
+RUN python -m wafgw.train --data data/dataset.csv --out models --synthetic-only \
+ && mkdir -p /var/lib/wafgw && chown -R waf /var/lib/wafgw /app/models
 USER waf
-# Mount a volume on /var/lib/wafgw to keep the event log; everything else can be read-only.
 ENV WAFGW_DB=/var/lib/wafgw/waf.db WAFGW_UPSTREAM=http://target:8000
-EXPOSE 8080 9000
+EXPOSE 8080 9000 8100
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["python", "-m", "wafgw"]

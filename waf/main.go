@@ -139,6 +139,7 @@ func main() {
 	listen := env("LISTEN", "127.0.0.1:8080")
 	upstream := env("UPSTREAM", "http://127.0.0.1:8000")
 	paranoia := env("PARANOIA", "1")
+	inspectOnly := os.Getenv("INSPECT_ONLY") == "1" // 1: answer 204 + verdict headers, do not forward
 
 	directives := fmt.Sprintf(`
 Include @coraza.conf-recommended
@@ -179,6 +180,10 @@ SecAuditEngine Off
 		h.Set("X-WAF-Score", strconv.Itoa(v.score))
 		h.Set("X-WAF-Rules", strings.Join(v.rules, ","))
 		h.Set("X-WAF-Block", block)
+		if inspectOnly { // side-car for the gateway: answer with the verdict, never touch the application
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		proxy.ServeHTTP(w, r) // always forward: monitor mode
 	})
 

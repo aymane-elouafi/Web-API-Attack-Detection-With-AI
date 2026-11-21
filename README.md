@@ -273,6 +273,38 @@ about +0.3 ms for repeated requests, +5 ms for new text (the payload model runs)
 Not done: TLS termination (put it behind Caddy/nginx or add certs), Coraza chained in,
 sharing state between several gateway copies, WebSockets, log rotation.
 
+### Gateway layers beyond the five detectors
+
+- **Response protection** (`wafgw/response.py`, `guard.py`): scans the start (64 KB) of text/JSON
+  answers for stack traces, DB errors, private keys, cloud keys, JWTs, password/secret fields,
+  Luhn-valid cards, SSNs, IBANs, bulk e-mails, directory listings and abnormal response size;
+  action `alert` (default), `redact` or `block` (block mode only). Larger or binary bodies stream.
+- **Honeypots and canaries** (`wafgw/honeypot.py`): fake `/.env`, `/.git/config`, `/backup.sql`,
+  `/api/internal`, login pages answered by the gateway itself; a hit is a near-certain attacker
+  (auto-ban with expiry in block mode). Canary credentials served there raise a risk-1.0
+  `canary_used` event if later presented.
+- **Bot and reputation layer** (`wafgw/bot.py`, `intel.py`): scanner signatures, fake-browser
+  header anomalies, robotic rhythm, failing sweeps; adaptive per-client rate limits; operator
+  supplied IP blocklists/allowlists (Spamhaus/FireHOL format) and country/network rules from
+  `data/intel/` (nothing is downloaded). 0 of 2,640 normal dataset requests reached the alert
+  level; bot signals are meant to add to the other detectors, not replace them.
+- **Coraza side-car (optional 6th detector)**: the gateway sends a copy of each request to a
+  Coraza+CRS side-car (`INSPECT_ONLY=1`) and fuses its verdict (`docker compose --profile coraza`).
+- **Incidents and reports** (`wafgw/incidents.py`, `report.py`, `explainer.py`): events are grouped
+  into incidents with a rule-based write-up (timeline, outcome, severity, OWASP API Top 10 / CWE /
+  MITRE ATT&CK, fix advice, one-click actions); printable self-contained HTML reports and JSON,
+  optionally scheduled; an optional LLM narrative that is OFF by default, sends only computed
+  facts (no bodies/headers, masked IP) and is labelled "AI-written".
+- **Docker**: `docker compose up -d` runs gateway + demo API + console (non-root, read-only fs,
+  admin and console on 127.0.0.1, token required, volumes for the event DB and models). Through
+  the gateway requests took ~12-14 ms median (Docker port forwarding included), ~18 ms with
+  Coraza. See `docs/DEPLOYMENT.md`; its backup, systemd and nginx/Caddy examples are untested.
+
+Caveats: the demo data is all attacks against a deliberately vulnerable app, so incident
+severities cluster high; models in the Docker image are trained on the synthetic data only
+(copy your stronger local ones in, see the deployment guide); a fast benchmark loop from one IP
+without cookies can itself trip the bot rhythm rules.
+
 ## Management console
 
 `python -m dashboard` serves a vanilla-JS single page (no CDN, light/dark, phone width, designed
@@ -290,7 +322,7 @@ simulated impact; unsafe ones cannot be approved), **Policies** (mode, threshold
 live preview), **Simulator** (replays stored events + a known-attack corpus; the server refuses a
 change that would lose a known attack), **Threats** (per-client timelines), **Alerts**
 (Slack/Discord/webhook with dedup), **Settings** (policy export/import as JSON, audit log),
-**Evaluation** (the dataset comparison of all detectors). Known issue: the demo generator sends
+**Evaluation** (the dataset comparison of all detectors), plus **Incidents**, **Reports**, **Honeypots & Leaks** and bot/reputation panels on **Threats**. Known issue: the demo generator sends
 requests in seconds, so the behavior detector flags ~55% of the demo traffic; a paced replay
 would fix the demo, not the detectors.
 

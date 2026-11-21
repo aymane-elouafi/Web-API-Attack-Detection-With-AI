@@ -6,7 +6,7 @@ import sys
 
 import uvicorn
 
-from wafgw import config
+from wafgw import config, report
 from wafgw.admin import build_admin
 from wafgw.engine import Engine
 from wafgw.proxy import build_app
@@ -47,13 +47,13 @@ async def run(cfg: dict) -> None:
     servers.append(uvicorn.Server(proxy_config(cfg, build_app(cfg, engine, store))))
     try:
         host, port = _addr(cfg["admin"]["listen"])
-        servers.append(uvicorn.Server(uvicorn.Config(build_admin(engine, store, os.environ.get("WAF_ADMIN_TOKEN")),
+        servers.append(uvicorn.Server(uvicorn.Config(build_admin(engine, store, os.environ.get("WAF_ADMIN_TOKEN"), cfg),
                                                      host=host, port=port, log_level="warning")))
     except RuntimeError as exc:
         print(f"warning: {exc}", file=sys.stderr)
     print(f"gateway {'https' if cfg['tls']['cert'] else 'http'}://{cfg['proxy']['listen']} -> {cfg['proxy']['upstream']}  mode={engine.mode}  "
           f"admin={'on ' + cfg['admin']['listen'] if len(servers) > 1 else 'OFF'}")
-    await asyncio.gather(watch_models(engine), *(s.serve() for s in servers))
+    await asyncio.gather(watch_models(engine), report.schedule(cfg, store, engine), *(s.serve() for s in servers))
 
 
 def main() -> None:

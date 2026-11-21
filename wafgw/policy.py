@@ -4,7 +4,7 @@ from urllib.parse import parse_qsl
 
 import numpy as np
 
-DETECTORS = ("rules", "payload ML", "behavior", "schema")      # the ones an exemption can silence
+DETECTORS = ("rules", "payload ML", "behavior", "schema", "coraza", "bot", "intel")      # the ones an exemption can silence
 
 
 def param_names(query: str, body: str) -> set[str]:

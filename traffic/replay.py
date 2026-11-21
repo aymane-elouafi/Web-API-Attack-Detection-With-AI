@@ -63,6 +63,8 @@ async def play(url: str, plan, sent: dict, status: Counter) -> None:
         for offset, r in steps:
             await asyncio.sleep(max(0.0, t0 + start + offset - time.monotonic()))
             headers = {"User-Agent": r["user_agent"], "X-Forwarded-For": r["client_ip"], "Host": HOST}
+            if r["user_agent"].startswith("Mozilla/5.0"):      # browsers always send these; the bot detector checks for them
+                headers.update({"Accept": "text/html,application/json;q=0.9,*/*;q=0.8", "Accept-Language": "en-US,en;q=0.9"})
             if r["user"] and (r["client_ip"], r["user"]) in tokens:
                 headers["Authorization"] = "Bearer " + tokens[(r["client_ip"], r["user"])]
             target = r["path"] + ("?" + r["query"] if r["query"] else "")

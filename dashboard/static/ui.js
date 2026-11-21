@@ -73,6 +73,7 @@ const ICONS = {
   policies: 'M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6',
   simulator: 'M9 3h6M10 3v6.5L4.5 19a2 2 0 0 0 1.7 3h11.6a2 2 0 0 0 1.7-3L14 9.5V3',
   apisec: 'M12 2l8 3v6c0 5-3.4 9.3-8 11-4.6-1.7-8-6-8-11V5zM9 12l2 2 4-4',
+  leaks: 'M12 2.7l5.7 5.7a8 8 0 1 1-11.4 0zM9 14a3 3 0 0 0 3 3',
   threats: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 2v4M12 18v4M2 12h4M18 12h4',
   alerts: 'M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0',
   settings: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z',
@@ -176,7 +177,7 @@ function riskGauge(risk, thr) {
   return g;
 }
 /* One row per detector, in its own colour; the tick marks the 0.5 level at which a detector alerts alone. */
-const DET_KEY = { rules: 'rules', 'payload ML': 'ml', payload_ml: 'ml', ml: 'ml', behavior: 'behavior', schema: 'schema', coraza: 'waf' };
+const DET_KEY = { rules: 'rules', 'payload ML': 'ml', payload_ml: 'ml', ml: 'ml', behavior: 'behavior', schema: 'schema', coraza: 'waf', bot: 'bot', intel: 'intel' };
 const detKey = n => DET_KEY[n] || 'rules';
 function detectorBars(entries) {
   return h('div', { class: 'det-list' }, entries.map(([name, v]) => {

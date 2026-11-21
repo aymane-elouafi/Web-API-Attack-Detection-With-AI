@@ -56,6 +56,8 @@ async function openEvent(id, onChange) {
     h('div', {}, h('h3', {}, 'Request'), h('pre', { class: 'req', style: 'margin-top:8px' }, highlight(`${ev.method} ${ev.path}${ev.query ? '?' + ev.query : ''}`, terms), x.decoded.query ? ['\n\ndecoded: ', highlight(x.decoded.query, terms)] : '', x.decoded.body ? ['\n\nbody: ', highlight(x.decoded.body, terms)] : '', '\n\nuser-agent: ', highlight(ev.user_agent, terms))),
     ev.detectors.behavior != null || ev.reasons.some(r => r.detector === 'behavior') ? behaviorBox(ev) : null,
     schemaBox(ev),
+    botIntelBox(ev),
+    leakBox(ev),
     h('div', { class: 'stack' }, h('h3', {}, 'Decide'), h('div', { class: 'row' },
       h('button', { class: 'btn primary', onclick: async () => { await act(() => api('/gw/feedback', { body: { event_id: id, verdict: 'benign' } }), 'Marked benign. See the Learning Inbox.'); fb.textContent = 'You marked this benign.'; onChange && onChange(); } }, 'Not an attack'),
       h('button', { class: 'btn', onclick: async () => { await act(() => api('/gw/feedback', { body: { event_id: id, verdict: 'attack' } }), 'Marked as a real attack'); fb.textContent = 'You marked this attack.'; onChange && onChange(); } }, 'Real attack'),
@@ -73,8 +75,26 @@ function schemaBox(ev) {
   const r = ev.reasons.find(r => r.detector === 'schema'); if (!r) return null;
   return h('div', {}, h('h3', {}, 'API schema'), h('div', { class: 'stack', style: 'margin-top:8px' }, r.detail.split('; ').map(p => h('div', {}, h('span', { class: 'chip bad' }, p.split(':')[0]), ' ', h('span', { class: 'muted' }, p.slice(p.indexOf(':') + 1))))));
 }
+/* ---- response leaks, honeypots, canaries ------------------------------------------------------------ */
+const leakChips = e => [...(e.response_flags && e.response_flags.length ? [h('span', { class: 'chip warn', title: e.response_flags.map(f => f.kind).join(', ') }, 'leak')] : []),
+  ...(e.reasons || []).filter(r => r.detector === 'honeypot' || r.detector === 'canary_used').map(r => h('span', { class: 'chip bad' }, r.detector === 'honeypot' ? 'honeypot' : 'canary used'))];
+function leakBox(ev) {
+  const flags = ev.response_flags || [], hit = (ev.reasons || []).filter(r => r.detector === 'honeypot' || r.detector === 'canary_used');
+  if (!flags.length && !hit.length) return null;
+  return h('div', {}, h('h3', {}, 'Leaks and traps'), h('div', { class: 'stack', style: 'margin-top:8px' },
+    hit.map(r => h('div', {}, h('span', { class: 'chip bad' }, r.detector === 'honeypot' ? 'honeypot' : 'canary used'), ' ', h('span', { class: 'muted' }, r.detector === 'honeypot' ? 'Nobody legitimate asks for this path. The gateway served a fake and never forwarded it. ' + r.detail : r.detail + ': a fake credential from a honeypot came back, so someone is using what they stole.'))),
+    flags.map(f => h('div', {}, h('span', { class: 'chip warn' }, f.kind.replace(/_/g, ' ')), ' ', h('span', { class: 'muted' }, f.detail))),
+    flags.length ? h('p', { class: 'muted', style: 'margin:0' }, `Response ${ev.resp_bytes ?? '?'} bytes. This is about what the application sent back; it did not change the request verdict.`) : null));
+}
+function botIntelBox(ev) {
+  const rs = ev.reasons.filter(r => r.detector === 'bot' || r.detector === 'intel'); if (!rs.length) return null;
+  return h('div', {}, h('h3', {}, 'Bots and reputation'), h('div', { class: 'stack', style: 'margin-top:8px' }, rs.flatMap(r => String(r.detail).split('; ').map(p => {
+    const i = p.indexOf(': ');
+    return h('div', {}, h('span', { class: 'chip ' + (r.strength >= 0.5 ? 'bad' : 'warn') }, r.detector === 'intel' ? 'reputation' : (i > 0 ? p.slice(0, i) : 'bot')), ' ', h('span', { class: 'muted' }, i > 0 && r.detector === 'bot' ? p.slice(i + 2) : p));
+  }))));
+}
 function exemptFormFill(form, ev, detector) {
-  const prefix = h('input', { value: ev.path, 'aria-label': 'Path prefix' }), det = h('select', { 'aria-label': 'Detector' }, ['rules', 'payload ML', 'behavior', 'schema'].map(d => h('option', { value: d, selected: d === detector }, d)));
+  const prefix = h('input', { value: ev.path, 'aria-label': 'Path prefix' }), det = h('select', { 'aria-label': 'Detector' }, ['rules', 'payload ML', 'behavior', 'schema', 'bot', 'intel'].map(d => h('option', { value: d, selected: d === detector }, d)));
   const names = [...new URLSearchParams(ev.query).keys()], param = h('input', { value: names[0] || '', placeholder: 'any parameter', 'aria-label': 'Parameter' });
   const out = h('div', {});
   const cand = () => ({ prefix: prefix.value.trim(), param: param.value.trim(), detector: det.value, note: 'from event ' + ev.id });
@@ -95,7 +115,7 @@ function simSummary(s) {
 /* ---- views -------------------------------------------------------------------------------------- */
 const views = {}; let cleanup = null, badge = 0;
 /* [route, label, icon, go-to key] */
-const NAV = [['overview', 'Overview', 'overview', 'o'], ['events', 'Events', 'events', 'e'], ['inbox', 'Learning Inbox', 'inbox', 'i'], ['policies', 'Policies', 'policies', 'p'], ['simulator', 'Simulator', 'simulator', 's'], ['apisec', 'API Security', 'apisec', 'a'], ['threats', 'Threats', 'threats', 't'], ['alerts', 'Alerts', 'alerts', 'l'], ['settings', 'Settings', 'settings', ','], ['evaluation', 'Evaluation', 'evaluation', 'v']];
+const NAV = [['overview', 'Overview', 'overview', 'o'], ['events', 'Events', 'events', 'e'], ['inbox', 'Learning Inbox', 'inbox', 'i'], ['policies', 'Policies', 'policies', 'p'], ['simulator', 'Simulator', 'simulator', 's'], ['apisec', 'API Security', 'apisec', 'a'], ['leaks', 'Honeypots & Leaks', 'leaks', 'h'], ['threats', 'Threats', 'threats', 't'], ['alerts', 'Alerts', 'alerts', 'l'], ['settings', 'Settings', 'settings', ','], ['evaluation', 'Evaluation', 'evaluation', 'v']];
 
 views.overview = async root => {
   let win = +(localStorage.win || 3600), live = true, lastId = 0, timer, mode = 'monitor';
@@ -177,8 +197,8 @@ views.events = async root => {
   const evRow = e => { const open = () => openEvent(e.id, () => load()); return press(h('div', { class: 'ev', role: 'button', onclick: open },
     h('div', { class: 'row', style: 'gap:6px' }, riskChip(e.risk, thr), actionChip(e.action), h('span', { class: 'grow' }), h('span', { class: 'muted nw' }, clock(e.ts))),
     h('div', { class: 'mono ev-req' }, `${e.method} ${e.path}${e.query ? '?' + e.query.slice(0, 70) : ''}`),
-    h('div', { class: 'muted' }, e.client_ip, ' · ', Object.keys(e.detectors).filter(d => e.detectors[d] > 0).join(', ') || 'no detector')), open); };
-  const draw = hasMore => { more_ = hasMore; list.replaceChildren(phone.matches ? (rows.length ? h('div', { class: 'ev-list' }, rows.map(evRow)) : empty('Send traffic through the gateway, or relax the filters.', 'No events match')) : table(['Time', 'Risk', 'Action', 'Request', 'Client', 'Why'], rows.map(e => ({ id: e.id, cells: [h('span', { class: 'muted nw' }, clock(e.ts)), riskChip(e.risk, thr), actionChip(e.action), h('span', { class: 'mono' }, `${e.method} ${e.path}${e.query ? '?' + e.query.slice(0, 70) : ''}`), h('span', { class: 'mono' }, e.client_ip), Object.keys(e.detectors).filter(d => e.detectors[d] > 0).map(d => h('span', { class: 'chip' }, d))] })), r => openEvent(r.id, () => load()), 'No events match. Send traffic through the gateway (or run: python -m traffic.replay), or relax the filters.'), hasMore ? h('div', { class: 'row end', style: 'margin-top:12px' }, more) : null); };
+    h('div', { class: 'muted' }, e.client_ip, ' · ', Object.keys(e.detectors).filter(d => e.detectors[d] > 0).join(', ') || 'no detector', ' ', ...leakChips(e))), open); };
+  const draw = hasMore => { more_ = hasMore; list.replaceChildren(phone.matches ? (rows.length ? h('div', { class: 'ev-list' }, rows.map(evRow)) : empty('Send traffic through the gateway, or relax the filters.', 'No events match')) : table(['Time', 'Risk', 'Action', 'Request', 'Client', 'Why'], rows.map(e => ({ id: e.id, cells: [h('span', { class: 'muted nw' }, clock(e.ts)), riskChip(e.risk, thr), actionChip(e.action), h('span', { class: 'mono' }, `${e.method} ${e.path}${e.query ? '?' + e.query.slice(0, 70) : ''}`), h('span', { class: 'mono' }, e.client_ip), ...leakChips(e), ...Object.keys(e.detectors).filter(d => e.detectors[d] > 0).map(d => h('span', { class: 'chip' }, d))] })), r => openEvent(r.id, () => load()), 'No events match. Send traffic through the gateway (or run: python -m traffic.replay), or relax the filters.'), hasMore ? h('div', { class: 'row end', style: 'margin-top:12px' }, more) : null); };
   phone.addEventListener('change', () => root.isConnected && draw(more_));
   const ctl = (el, key) => { el.addEventListener('input', () => { f[key] = el.value; clearTimeout(ctl.t); ctl.t = setTimeout(() => load().catch(e => toast(e.message)), 250); }); return el; };
   root.append(h('div', { class: 'stack page' }, h('div', { class: 'row' },
@@ -235,7 +255,7 @@ views.simulator = async root => {
   const cur = await gw('/exemptions'), mode = await gw('/mode'); let thr = mode.threshold, cands = [];
   const out = h('div', {}), val = h('b', {}, thr.toFixed(2)), list = h('div', {});
   const range = h('input', { type: 'range', min: .1, max: .95, step: .05, value: thr, 'aria-label': 'Candidate threshold', oninput: e => { thr = +e.target.value; val.textContent = thr.toFixed(2); } });
-  const f = { prefix: h('input', { placeholder: '/products/search', 'aria-label': 'Path prefix' }), param: h('input', { placeholder: 'parameter (optional)', 'aria-label': 'Parameter' }), det: h('select', { 'aria-label': 'Detector' }, ['rules', 'payload ML', 'behavior', 'schema'].map(d => h('option', { value: d }, d))) };
+  const f = { prefix: h('input', { placeholder: '/products/search', 'aria-label': 'Path prefix' }), param: h('input', { placeholder: 'parameter (optional)', 'aria-label': 'Parameter' }), det: h('select', { 'aria-label': 'Detector' }, ['rules', 'payload ML', 'behavior', 'schema', 'bot', 'intel'].map(d => h('option', { value: d }, d))) };
   const drawCands = () => list.replaceChildren(...cands.map((c, i) => h('div', { class: 'row' }, h('span', { class: 'chip' }, `${c.detector} · ${c.prefix}${c.param ? ' · ' + c.param : ''}`), h('button', { class: 'btn sm', onclick: () => { cands.splice(i, 1); drawCands(); } }, 'Remove'))));
   let last;
   async function run() {
@@ -256,6 +276,36 @@ views.simulator = async root => {
   await run();
 };
 
+async function botsCard(root, openClient) {
+  const [bots, intel] = await Promise.all([gw('/bots'), gw('/intel').catch(() => null)]);
+  root.append(h('div', { class: 'card page' }, h('h2', {}, 'Bots'),
+    h('p', { class: 'muted' }, 'Clients that behave like machines: scanner signatures, header oddities, robotic timing, URL walking, failing sweeps. The rhythm graph shows the gap between consecutive requests, low and flat means a script.'),
+    table(['Client', 'Requests', 'Strength', 'Signals', 'Rhythm', 'Last seen'], bots.rows.map(r => ({ ip: r.ip, cells: [h('span', { class: 'mono' }, r.ip), r.requests, h('b', {}, r.max_strength.toFixed(2)),
+      r.kinds.map(([k, n]) => h('span', { class: 'chip' }, `${k} ×${n}`)), sparkline(r.gaps.length ? r.gaps : [0], 'var(--d-bot)'), h('span', { class: 'muted' }, ago(r.last_ts))] })), r => openClient(r.ip),
+      'No bot-like clients in the last 24 hours.')));
+  root.append(intelCard(intel));
+}
+function intelCard(intel) {
+  if (!intel) return h('div', { class: 'card page' }, h('h2', {}, 'Reputation'), h('p', { class: 'muted' }, 'Threat intel is switched off ([intel] enabled = false in waf.toml).'));
+  const kind = h('select', { 'aria-label': 'List type' }, [['blocklist', 'Blocklist'], ['allowlist', 'Allowlist'], ['networks', 'Networks (cidr,country,asn)']].map(([v, l]) => h('option', { value: v }, l)));
+  const name = h('input', { placeholder: 'name, e.g. firehol-level1', 'aria-label': 'List name' });
+  const text = h('textarea', { rows: 4, placeholder: 'One IP or CIDR per line. “1.2.3.0/24 ; note” and Spamhaus/FireHOL files work as they are.', 'aria-label': 'List contents' });
+  const file = h('input', { type: 'file', accept: '.txt,.csv,.netset,text/plain', 'aria-label': 'Load a list from a file', onchange: async () => { const f = file.files[0]; if (f) { text.value = await f.text(); if (!name.value) name.value = f.name.replace(/\.[^.]*$/, ''); } } });
+  const countries = h('input', { value: intel.country_deny.join(', '), placeholder: 'e.g. KP, RU', 'aria-label': 'Denied countries' }), asns = h('input', { value: intel.asn_deny.map(a => 'AS' + a).join(', '), placeholder: 'e.g. AS64500', 'aria-label': 'Denied networks (ASN)' });
+  const lookupIn = h('input', { placeholder: 'Check an IP address', 'aria-label': 'IP to look up' }), lookupOut = h('div', { class: 'muted' });
+  const split = v => v.split(/[\s,]+/).filter(Boolean);
+  const download = async f => { const t = (await act(() => gw(`/intel/export?kind=${f.kind}&name=${encodeURIComponent(f.name)}`))).text; const a = h('a', { href: URL.createObjectURL(new Blob([t], { type: 'text/plain' })), download: f.name }); document.body.append(a); a.click(); a.remove(); };
+  return h('div', { class: 'card page stack' }, h('h2', {}, 'Reputation'),
+    h('p', { class: 'muted' }, `${intel.entries.blocklist} blocklisted, ${intel.entries.allowlist} allowlisted and ${intel.entries.networks} mapped networks. ${intel.hits_24h} requests matched a list in the last 24 h. Files are read from ${intel.dir} and reload by themselves.`),
+    table(['List', 'Type', 'Entries', 'Skipped lines', 'Updated', ''], intel.files.map(f => ({ cells: [h('span', { class: 'mono' }, f.name), f.kind, f.entries, f.bad_lines || '', h('span', { class: 'muted' }, ago(f.modified)),
+      h('span', { class: 'row' }, h('button', { class: 'btn', onclick: () => download(f) }, 'Export'), h('button', { class: 'btn danger', onclick: async () => { await act(() => gw(`/intel/${f.kind}/${encodeURIComponent(f.name)}`, { method: 'DELETE' }), 'List removed'); render(); } }, 'Remove'))] })),
+      null, 'No lists yet. Import a blocklist below, for example the Spamhaus DROP list or a FireHOL netset.'),
+    h('h3', {}, 'Import a list'), h('div', { class: 'row' }, kind, name, file), text,
+    h('div', { class: 'row' }, h('button', { class: 'btn primary', onclick: async () => { const r = await act(() => gw('/intel/import', { body: { kind: kind.value, name: name.value.trim(), text: text.value } })); toast(`Imported ${r.entries} entries` + (r.bad_lines ? `, skipped ${r.bad_lines} unreadable lines` : '')); render(); } }, 'Import')),
+    h('h3', {}, 'Country and network rules'), h('div', { class: 'row' }, countries, asns, h('button', { class: 'btn', onclick: async () => { await act(() => gw('/intel/policy', { body: { country_deny: split(countries.value), asn_deny: split(asns.value) } }), 'Saved. Needs a networks list to know where each address lives.'); } }, 'Save')),
+    h('h3', {}, 'Why is this IP listed?'), h('div', { class: 'row' }, lookupIn, h('button', { class: 'btn', onclick: async () => { try { const r = await gw('/intel/lookup?ip=' + encodeURIComponent(lookupIn.value.trim())); lookupOut.textContent = r.reason || (r.allowlist ? `Allowlisted (${r.allowlist.file}).` : 'Nothing known against this address.') + (r.network ? ` Network: ${r.network.country || '?'} ${r.network.asn ? 'AS' + r.network.asn : ''} ${r.network.org}` : ''); } catch (e) { lookupOut.textContent = e.message; } } }, 'Check')), lookupOut);
+}
+
 views.threats = async root => {
   const { rows } = await api('/threats');
   const timelineOf = async ip => {
@@ -267,8 +317,29 @@ views.threats = async root => {
       h('div', {}, h('h3', {}, 'Risk over time'), s), h('div', {}, h('h3', {}, 'Story'), evs.slice(-40).reverse().map(e => press(h('div', { class: 'row', role: 'button', style: 'padding:5px 0;border-top:1px solid var(--line);cursor:pointer', onclick: () => openEvent(e.id) }, riskChip(e.risk, thr), h('span', { class: 'muted' }, clock(e.ts)), h('span', { class: 'mono grow', style: 'word-break:break-all' }, `${e.method} ${e.path}`), actionChip(e.action)), () => openEvent(e.id))))));
   };
   root.append(h('div', { class: 'card page' }, h('h2', {}, 'Clients by risk (last 24 h)'), table(['Client', 'Requests', 'Flagged', 'Max risk', 'Main signals', 'Last seen', ''], rows.map(r => ({ ip: r.ip, cells: [h('span', { class: 'mono' }, r.ip), r.requests, r.flagged, h('b', {}, r.max_risk.toFixed(2)), r.top.map(([d, n]) => h('span', { class: 'chip' }, `${d} ×${n}`)), h('span', { class: 'muted' }, ago(r.last_ts)), r.denied ? h('span', { class: 'chip bad' }, 'banned') : ''] })), r => timelineOf(r.ip), 'No clients yet. They appear as soon as traffic goes through the gateway.')));
+  await botsCard(root, timelineOf);
 };
 
+views.leaks = async root => {
+  const d = await gw('/leaks'), r = d.settings.response, hp = d.settings.honeypots;
+  const f = { resp: h('input', { type: 'checkbox', checked: !!r.enabled, 'aria-label': 'Scan responses' }),
+    action: h('select', { 'aria-label': 'When a response leaks' }, [['alert', 'Alert only'], ['redact', 'Redact secrets'], ['block', 'Block the response']].map(([v, l]) => h('option', { value: v, selected: r.action === v }, l))),
+    hon: h('input', { type: 'checkbox', checked: !!hp.enabled, 'aria-label': 'Honeypots' }), canary: h('input', { type: 'checkbox', checked: !!hp.canary, 'aria-label': 'Canary tokens' }),
+    ban: h('input', { type: 'number', min: 0, max: 10080, value: hp.ban_minutes, 'aria-label': 'Ban minutes', style: 'width:6em' }) };
+  const save = () => act(() => gw('/leaks/settings', { body: { response: { enabled: f.resp.checked, action: f.action.value }, honeypots: { enabled: f.hon.checked, canary: f.canary.checked, ban_minutes: +f.ban.value } } }), 'Saved');
+  const kpi = (l, n) => h('div', { class: 'card kpi' }, h('span', { class: 'kpi-l' }, l), h('b', { class: 'kpi-n' }, n));
+  const cols = ['When', 'Risk', 'Request', 'Client', 'What'];
+  const line = (e, what) => ({ id: e.id, cells: [h('span', { class: 'muted nw' }, ago(e.ts)), riskChip(e.risk, .5), h('span', { class: 'mono' }, `${e.method} ${e.path}`), h('span', { class: 'mono' }, e.client_ip), what] });
+  root.append(h('div', { class: 'stack page' },
+    h('div', { class: 'grid kpis' }, kpi('Leaking responses, 24 h', d.leaks), kpi('Honeypot hits', d.honeypot_hits), kpi('Canary credentials used', d.canary_hits)),
+    h('div', { class: 'card stack' }, h('h2', {}, 'Settings'),
+      h('p', { class: 'muted', style: 'margin:0;max-width:66ch' }, 'Responses are scanned for stack traces, SQL errors, secrets, card numbers and other leaks. In monitor mode the gateway only reports them; redact and block apply in block mode. Honeypots are paths nobody legitimate visits: the gateway answers with a fake, logs a near-certain attacker and, in block mode, bans the IP for a while.'),
+      h('div', { class: 'row' }, h('label', { class: 'row' }, f.resp, 'Scan responses'), f.action), h('div', { class: 'row' }, h('label', { class: 'row' }, f.hon, 'Honeypots'), h('label', { class: 'row' }, f.canary, 'Canary credentials'), h('label', { class: 'row muted' }, 'Ban for (minutes)', f.ban)),
+      h('div', { class: 'row' }, h('button', { class: 'btn primary', onclick: save }, 'Save'), h('span', { class: 'muted' }, 'Honeypot paths: ', hp.paths.map(p => h('span', { class: 'chip mono' }, p))))),
+    h('div', { class: 'card' }, h('h2', {}, 'Most common leaks'), Object.keys(d.kinds).length ? h('div', { class: 'row' }, Object.entries(d.kinds).sort((a, b) => b[1] - a[1]).map(([k, n]) => h('span', { class: 'chip warn' }, `${k.replace(/_/g, ' ')} · ${n}`))) : empty('Nothing leaked in the last 24 hours.', 'All quiet')),
+    h('div', { class: 'card' }, h('h2', {}, 'Recent leaks'), table(cols, d.recent_leaks.map(e => line(e, e.response_flags.map(x => h('span', { class: 'chip warn' }, x.kind.replace(/_/g, ' '))))), r => openEvent(r.id), 'No leaks found in responses.')),
+    h('div', { class: 'card' }, h('h2', {}, 'Honeypot and canary hits'), table(cols, d.recent_hits.map(e => line(e, e.reasons.map(x => h('span', { class: 'chip bad' }, x.detector === 'honeypot' ? 'honeypot' : 'canary used')))), r => openEvent(r.id), 'No one has touched a trap yet.'))));
+};
 views.apisec = async root => {
   const s = await gw('/schema');
   if (!s.loaded) return root.append(h('div', { class: 'stack page' }, h('div', { class: 'card' }, h('h2', {}, 'No API schema loaded'), h('p', { class: 'muted', style: 'max-width:62ch' }, 'The schema detector flags requests that do not fit the API: unknown endpoints, parameters or methods, missing or mistyped fields, privileged fields such as role. Build one with: python -m wafgw.schema_learn --openapi <url> (or --dataset / --events). The gateway picks the file up by itself within a few seconds, or press the button.'), h('div', { class: 'row' }, h('button', { class: 'btn primary', onclick: async () => { const r = await act(() => gw('/reload', { method: 'POST' })); toast(r.reloaded.length ? 'Loaded: ' + r.reloaded.join(', ') : 'Nothing new to load'); render(); } }, 'Reload models')))));

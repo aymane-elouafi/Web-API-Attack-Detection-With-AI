@@ -7,7 +7,7 @@ from pathlib import Path
 
 import httpx
 from starlette.applications import Starlette
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from detection.schema import SchemaModel
@@ -49,6 +49,27 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
     def events(self):
         self.store.flush()
         return self.store.events()
+
+    async def test_coraza_sidecar_verdict_becomes_a_detector_and_a_down_sidecar_is_survivable(self):
+        async def verdict(request):                      # fake INSPECT_ONLY Coraza: flags anything with "evil" in the query
+            hit = "evil" in str(request.url.query)
+            return Response(status_code=204, headers={"x-waf-score": "8" if hit else "0", "x-waf-rules": "942100" if hit else ""})
+        self.cfg["coraza"]["enabled"] = True
+        self.store = Store(self.cfg["store"]["path"])
+        self.engine = Engine(self.cfg, self.store)
+        side = httpx.AsyncClient(transport=httpx.ASGITransport(Starlette(routes=[Route("/{p:path}", verdict)])), base_url="http://coraza")
+        app = build_app(self.cfg, self.engine, self.store, client=self.upstream, coraza_client=side)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app, client=("9.9.9.9", 1)), base_url="http://gw") as gw:
+            self.assertEqual((await gw.get("/products/search?q=laptop")).status_code, 200)
+            self.assertEqual((await gw.get("/products/search?q=evil")).status_code, 403)   # only Coraza objects
+        e = self.events()[0]
+        self.assertIn("coraza", [r["detector"] for r in e["reasons"]])
+        self.assertAlmostEqual(e["detectors"]["coraza"], 0.8)
+        down = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: (_ for _ in ()).throw(httpx.ConnectError("down"))))
+        app = build_app(self.cfg, self.engine, self.store, client=self.upstream, coraza_client=down)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app, client=("9.9.9.8", 1)), base_url="http://gw") as gw:
+            self.assertEqual((await gw.get("/products/search?q=laptop")).status_code, 200)
+        await side.aclose(); await down.aclose()
 
     async def test_benign_request_is_forwarded_and_logged(self):
         async with self.gateway() as gw:

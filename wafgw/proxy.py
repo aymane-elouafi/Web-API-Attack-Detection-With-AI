@@ -13,6 +13,8 @@ from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingR
 from starlette.routing import Route
 
 from wafgw.engine import Engine, Verdict, session_id
+from wafgw.guard import Guards
+from wafgw.honeypot import CANARY_RISK, HONEYPOT_RISK
 from wafgw.store import Store, redact
 
 HOP = {b"connection", b"keep-alive", b"proxy-authenticate", b"proxy-authorization", b"te", b"trailers",
@@ -50,10 +52,26 @@ def _forward_headers(request: Request, ip: str, rid: str) -> list[tuple[bytes, b
                   (b"x-waf-request-id", rid.encode())]
 
 
-def build_app(cfg: dict, engine: Engine, store: Store, client: httpx.AsyncClient | None = None) -> Starlette:
+def build_app(cfg: dict, engine: Engine, store: Store, client: httpx.AsyncClient | None = None,
+              coraza_client: httpx.AsyncClient | None = None) -> Starlette:
     p = cfg["proxy"]
     upstream = p["upstream"].rstrip("/")
-    state = {"client": client}
+    state = {"client": client, "coraza": coraza_client}
+    cz = cfg["coraza"]
+    guards = engine.guards = Guards(cfg, store)               # response leak scan + honeypots (the admin API reads them too)
+    hp = guards.honeypots
+
+    async def ask_coraza(request: Request, raw_path: str, query: str, body: bytes, ip: str, rid: str) -> dict:
+        """Send a copy of the request to the Coraza+CRS side-car (INSPECT_ONLY=1) BEFORE forwarding, read its verdict headers."""
+        if state["coraza"] is None:
+            state["coraza"] = httpx.AsyncClient(timeout=cz["timeout_s"])
+        url = cz["url"].rstrip("/") + raw_path + (f"?{query}" if query else "")
+        try:
+            r = await state["coraza"].send(state["coraza"].build_request(
+                request.method, url, headers=_forward_headers(request, ip, rid), content=body))
+            return {"score": int(r.headers.get("x-waf-score", 0)), "rules": r.headers.get("x-waf-rules", "")}
+        except (httpx.HTTPError, ValueError) as exc:        # side-car down: keep protecting with the other detectors
+            return {"score": 0, "rules": "", "error": f"coraza unavailable ({type(exc).__name__})"}
 
     def blocked(v: Verdict, rid: str, request: Request) -> Response:
         headers = {"x-waf-request-id": rid, "cache-control": "no-store"}
@@ -64,13 +82,36 @@ def build_app(cfg: dict, engine: Engine, store: Store, client: httpx.AsyncClient
             return JSONResponse({"error": "blocked", "request_id": rid}, v.status, headers)
         return HTMLResponse(BLOCK_HTML.format(rid=rid), v.status, headers)
 
-    def log(request: Request, info: dict, rid: str, v: Verdict, status: int, action: str) -> None:
+    def log(request: Request, info: dict, rid: str, v: Verdict, status: int, action: str, extra: dict | None = None) -> None:
         store.log({"ts": info["ts"], "request_id": rid, "client_ip": info["client_ip"], "method": info["method"],
                    "host": request.headers.get("host", ""), "path": info["path"],
                    "query": redact(info["query"], 1024), "user_agent": info["user_agent"][:256],
                    "body_snippet": redact(info["body"]), "upstream_status": status, "action": action,
                    "risk": round(v.risk, 4), "detectors": json.dumps({k: round(x, 4) for k, x in v.detectors.items()}),
-                   "reasons": json.dumps(v.reasons), "latency_ms": round(v.latency_ms, 3), "route": v.route})
+                   "reasons": json.dumps(v.reasons), "latency_ms": round(v.latency_ms, 3), "route": v.route, **(extra or {})})
+
+    def ban(ip: str, mode: str, why: str) -> None:
+        minutes = hp.settings()["ban_minutes"]
+        if mode == "block" and minutes and not store.listed(ip, "allow"):
+            store.add_list(ip, "deny", why, ttl_s=minutes * 60)     # block mode only: monitor mode never changes traffic
+
+    def honeypot(request: Request, info: dict, rid: str, mode: str) -> Response:
+        """Answer a honeypot path with a fake (never forwarded). A real user never asks for these paths."""
+        reasons = [{"detector": "honeypot", "score": 1, "strength": HONEYPOT_RISK, "detail": f"{info['method']} {info['path']}"}]
+        log(request, info, rid, Verdict(HONEYPOT_RISK, "block", reasons, route="honeypot"), 200, "blocked")
+        ban(info["client_ip"], mode, f"honeypot {info['path']}")
+        ctype, content = hp.fake(info["path"])
+        return Response(content, 200, media_type=ctype, headers={"x-waf-request-id": rid, "cache-control": "no-store"})
+
+    def canary(v: Verdict, request: Request, info: dict, mode: str) -> Verdict:
+        """A fake credential from a honeypot came back in a request: someone is using what they stole."""
+        text = " ".join([request.headers.get("authorization", ""), request.headers.get("cookie", ""), info["query"], info["body"]])
+        kind = hp.canary_used(text)
+        if not kind:
+            return v
+        ban(info["client_ip"], mode, f"canary {kind}")
+        reasons = [{"detector": "canary_used", "score": 1, "strength": CANARY_RISK, "detail": f"{kind} canary presented"}] + v.reasons
+        return Verdict(CANARY_RISK, "block" if mode == "block" else "monitor", reasons, v.latency_ms, 403, v.route)
 
     async def handle(request: Request) -> Response:
         rid = uuid.uuid4().hex[:12]
@@ -107,8 +148,13 @@ def build_app(cfg: dict, engine: Engine, store: Store, client: httpx.AsyncClient
         query = request.scope["query_string"].decode("latin-1")
         info = {"method": request.method, "path": request.url.path, "query": query, "ts": time.time(),
                 "body": body.decode("utf-8", "replace"), "user_agent": request.headers.get("user-agent", ""),
-                "client_ip": ip, "session": session_id(request.headers)}
+                "client_ip": ip, "session": session_id(request.headers), "headers": request.headers.raw, "http_version": request.scope.get("http_version", "1.1")}
 
+        mode = engine.route_for(info["path"]).get("mode", engine.mode)
+        if hp.match(info["path"]) and not store.listed(ip, "deny"):
+            return honeypot(request, info, rid, mode)
+        if cz["enabled"]:
+            info["coraza"] = await ask_coraza(request, raw_path, query, body, ip, rid)
         try:
             v = engine.inspect(info)
         except Exception as exc:                                  # a bug in a detector must not take the site down
@@ -117,6 +163,7 @@ def build_app(cfg: dict, engine: Engine, store: Store, client: httpx.AsyncClient
                 log(request, info, rid, v, 503, "blocked")
                 return JSONResponse({"error": "service unavailable", "request_id": rid}, 503)
 
+        v = canary(v, request, info, mode)
         if v.action == "block":
             log(request, info, rid, v, v.status, "blocked")
             return blocked(v, rid, request)
@@ -124,7 +171,7 @@ def build_app(cfg: dict, engine: Engine, store: Store, client: httpx.AsyncClient
         if state["client"] is None:
             state["client"] = httpx.AsyncClient(timeout=p["upstream_timeout_s"], follow_redirects=False)
         url = upstream + raw_path + (f"?{query}" if query else "")
-        req = state["client"].build_request(request.method, url, headers=_forward_headers(request, ip, rid), content=body)
+        req = state["client"].build_request(request.method, url, headers=guards.upstream_headers(_forward_headers(request, ip, rid)), content=body)
         try:
             resp = await state["client"].send(req, stream=True)
         except httpx.TimeoutException:
@@ -135,9 +182,22 @@ def build_app(cfg: dict, engine: Engine, store: Store, client: httpx.AsyncClient
             return JSONResponse({"error": "bad gateway", "request_id": rid}, 502)
 
         engine.observe(info, resp.status_code)
-        log(request, info, rid, v, resp.status_code, "would_block" if v.action == "monitor" else "allowed")
-        out = StreamingResponse(resp.aiter_raw(), resp.status_code, background=BackgroundTask(resp.aclose))
-        out.raw_headers = [(k, val) for k, val in resp.headers.raw if k.lower() not in HOP | {b"date", b"server"}] + [(b"x-waf-request-id", rid.encode())]
+        g = await guards.inspect(resp, info["path"], mode, request.method)
+        extra = guards.event_fields(g, v.reasons)
+        if g["outcome"] == "blocked":                             # leak found, nothing was sent to the client yet
+            await resp.aclose()
+            log(request, info, rid, v, 502, "blocked", extra)
+            return JSONResponse({"error": "response blocked", "request_id": rid}, 502, {"x-waf-request-id": rid, "cache-control": "no-store"})
+        log(request, info, rid, v, resp.status_code, "would_block" if v.action == "monitor" else "allowed", extra)
+        headers = [(k, val) for k, val in resp.headers.raw if k.lower() not in HOP | {b"date", b"server"}]
+        tail = [(b"x-waf-request-id", rid.encode())]
+        if g["body"] is not None:                                 # small text answer, already read: send it in one piece
+            await resp.aclose()
+            out = Response(g["body"], resp.status_code)
+            out.raw_headers = [(k, val) for k, val in headers if k.lower() != b"content-length"] + [(b"content-length", str(len(g["body"])).encode())] + tail
+            return out
+        out = StreamingResponse(g["stream"], resp.status_code, background=BackgroundTask(resp.aclose))
+        out.raw_headers = headers + tail
         return out
 
     @contextlib.asynccontextmanager
@@ -145,5 +205,7 @@ def build_app(cfg: dict, engine: Engine, store: Store, client: httpx.AsyncClient
         yield
         if state["client"] is not None and client is None:
             await state["client"].aclose()
+        if state["coraza"] is not None and coraza_client is None:
+            await state["coraza"].aclose()
 
     return reject_websockets(Starlette(routes=[Route("/{path:path}", handle, methods=METHODS)], lifespan=lifespan))

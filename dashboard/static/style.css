@@ -17,7 +17,7 @@
   --e1:0 0 0 .5px var(--hair),0 1px 2px rgba(0,0,0,.04),0 4px 16px rgba(0,0,0,.04);
   --e3:0 0 0 .5px var(--hair),0 24px 70px rgba(0,0,0,.26);
   --scrim:rgba(0,0,0,.32);
-  --d-rules:#0a6ad8;--d-ml:#5856d6;--d-behavior:#12879a;--d-schema:#a14fc4;--d-waf:#7c7c82;
+  --d-rules:#0a6ad8;--d-ml:#5856d6;--d-behavior:#12879a;--d-schema:#a14fc4;--d-waf:#7c7c82;--d-bot:#c2410c;--d-intel:#b4234a;
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme=light]){
   --bg:#000;--surface:#1c1c1e;--ink:#f5f5f7;--ink-2:#d1d1d6;--mute:#a1a1a6;
@@ -28,7 +28,7 @@
   --e1:0 0 0 .5px var(--hair),0 1px 2px rgba(0,0,0,.5),0 6px 20px rgba(0,0,0,.35);
   --e3:0 0 0 .5px var(--hair),0 24px 70px rgba(0,0,0,.7);
   --scrim:rgba(0,0,0,.55);
-  --d-rules:#4da3ff;--d-ml:#8e8cf5;--d-behavior:#46c2d4;--d-schema:#d08cf0;--d-waf:#a1a1a6}}
+  --d-rules:#4da3ff;--d-ml:#8e8cf5;--d-behavior:#46c2d4;--d-schema:#d08cf0;--d-waf:#a1a1a6;--d-bot:#ff9f5a;--d-intel:#ff7a93}}
 :root[data-theme=dark]{
   --bg:#000;--surface:#1c1c1e;--ink:#f5f5f7;--ink-2:#d1d1d6;--mute:#a1a1a6;
   --hair:rgba(255,255,255,.1);--fill:rgba(255,255,255,.07);--fill-2:rgba(255,255,255,.12);
@@ -38,7 +38,7 @@
   --e1:0 0 0 .5px var(--hair),0 1px 2px rgba(0,0,0,.5),0 6px 20px rgba(0,0,0,.35);
   --e3:0 0 0 .5px var(--hair),0 24px 70px rgba(0,0,0,.7);
   --scrim:rgba(0,0,0,.55);
-  --d-rules:#4da3ff;--d-ml:#8e8cf5;--d-behavior:#46c2d4;--d-schema:#d08cf0;--d-waf:#a1a1a6;color-scheme:dark}
+  --d-rules:#4da3ff;--d-ml:#8e8cf5;--d-behavior:#46c2d4;--d-schema:#d08cf0;--d-waf:#a1a1a6;--d-bot:#ff9f5a;--d-intel:#ff7a93;color-scheme:dark}
 :root[data-theme=light]{color-scheme:light}
 
 *{box-sizing:border-box}
@@ -193,7 +193,7 @@ pre.req{margin:0;padding:var(--s3) var(--s4);border-radius:var(--r-md);backgroun
 .det .row{gap:var(--s2);margin-bottom:6px}.det b{font-weight:600}
 .dot-d{width:8px;height:8px;border-radius:50%;background:var(--d-color)}
 .det .bar i{background:var(--d-color)}
-.d-rules{--d-color:var(--d-rules)}.d-ml{--d-color:var(--d-ml)}.d-behavior{--d-color:var(--d-behavior)}.d-schema{--d-color:var(--d-schema)}.d-waf{--d-color:var(--d-waf)}
+.d-rules{--d-color:var(--d-rules)}.d-ml{--d-color:var(--d-ml)}.d-behavior{--d-color:var(--d-behavior)}.d-schema{--d-color:var(--d-schema)}.d-waf{--d-color:var(--d-waf)}.d-bot{--d-color:var(--d-bot)}.d-intel{--d-color:var(--d-intel)}
 .sec{display:flex;flex-direction:column;gap:var(--s3)}
 
 /* ---- feed ------------------------------------------------------------------------------------------ */

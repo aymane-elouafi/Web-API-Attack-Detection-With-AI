@@ -18,6 +18,8 @@ from detection.ml_behavior import FEATURES, WINDOW
 from detection.ml_payload import _stats, request_text
 from detection.rules import StatefulRules, stateless_hits
 from detection.schema import SchemaModel
+from wafgw.bot import BotDetector
+from wafgw.intel import Intel
 from wafgw.policy import exempt_detectors, fuse
 
 _ORDER = re.compile(r"^/orders/\d+$")
@@ -105,6 +107,13 @@ class Engine:
         self.threshold = (store and store.get("threshold")) or e["threshold"]
         self.rl = cfg["rate_limit"]
         self.buckets: dict[str, list] = {}
+        self.risk_ewma: dict[str, float] = {}                 # per client: recent average risk, drives the adaptive rate limit
+        self.bot = BotDetector() if cfg.get("bot", {}).get("enabled", True) else None
+        i = cfg.get("intel", {})
+        self.intel = Intel(i.get("dir", "data/intel"), i.get("country_deny", ()), i.get("asn_deny", ()), i.get("dnsbl_zones", ()),
+                           i.get("dnsbl_enabled", False)) if i.get("enabled", True) else None
+        if self.intel and store and (pol := store.get("intel_policy")):
+            self.intel.set_policy(pol.get("country_deny"), pol.get("asn_deny"))
         self.rules = StatefulRules()
         self.models_dir, self.reload_every = models, 5.0
         self._payload_score = lru_cache(maxsize=4096)(self._score_payload)   # sklearn costs ~2 ms; repeated requests are common
@@ -156,6 +165,8 @@ class Engine:
     def reload(self) -> dict:
         """Admin-triggered: models + policy, no restart."""
         changed = self.reload_models()
+        if self.intel:
+            self.intel.reload()
         self.reload_policy()
         return {"reloaded": changed, "errors": self.reload_errors, "mode": self.mode, "threshold": self.threshold}
 
@@ -185,9 +196,15 @@ class Engine:
     def route_for(self, path: str) -> dict:
         return next((r for r in self.routes if path.startswith(r["prefix"])), {})
 
-    def _bucket_ok(self, ip: str, now: float) -> bool:
-        tokens, last = self.buckets.get(ip, (self.rl["burst"], now))
-        tokens = min(self.rl["burst"], tokens + (now - last) * self.rl["rate_per_s"])
+    def _bucket_ok(self, ip: str, now: float, route: dict | None = None) -> bool:
+        """Token bucket per client. A route may set its own rate_per_s / burst; with adaptive on, a client whose
+        recent risk is high refills slower and has a smaller burst (down to 15% for a client that is always flagged)."""
+        rate, burst = (route or {}).get("rate_per_s", self.rl["rate_per_s"]), (route or {}).get("burst", self.rl["burst"])
+        if self.rl.get("adaptive", True):
+            scale = 1 - 0.85 * self.risk_ewma.get(ip, 0.0)
+            rate, burst = rate * scale, max(burst * scale, 2)
+        tokens, last = self.buckets.get(ip, (burst, now))
+        tokens = min(burst, tokens + (now - last) * rate)
         self.buckets[ip] = (tokens - 1, now) if tokens >= 1 else (tokens, now)
         if len(self.buckets) > 50_000:
             self.buckets.clear()
@@ -199,6 +216,7 @@ class Engine:
         if time.monotonic() >= self._next_check:              # cheap: three stat() calls every few seconds
             self._next_check = time.monotonic() + self.reload_every
             self.reload_models()
+            self.intel and self.intel.reload_if_changed()
         route = self.route_for(info["path"])
         v = self._decide(info, route)
         v.route, v.latency_ms = route.get("prefix", ""), (time.perf_counter() - t0) * 1000
@@ -212,7 +230,9 @@ class Engine:
             return Verdict(0.0, "allow", [{"detector": "allow_list", "score": 0, "strength": 0, "detail": ip}])
         if self.store and self.store.listed(ip, "deny"):
             return Verdict(1.0, "block", [{"detector": "deny_list", "score": 1, "strength": 1, "detail": ip}])
-        if self.rl["enabled"] and not self._bucket_ok(ip, now):
+        if self.intel and (hit := self.intel.allowed(ip)):
+            return Verdict(0.0, "allow", [{"detector": "intel_allow", "score": 0, "strength": 0, "detail": f"allowlisted in {hit['file']}"}])
+        if self.rl["enabled"] and not self._bucket_ok(ip, now, route):
             return Verdict(1.0, "block", [{"detector": "rate_limit", "score": 1, "strength": 1, "detail": "too many requests"}], status=429)
 
         body = info["body"][: self.inspect_bytes]
@@ -234,6 +254,16 @@ class Engine:
             if found:
                 reasons.append({"detector": "schema", "score": len(found), "strength": self.schema.strength(found),
                                 "detail": "; ".join(f"{f['kind']}: {f['detail']}" for f in found[:5])})
+        cz = info.get("coraza")
+        if cz is not None:                                    # Coraza+CRS verdict fetched by the proxy; score 5 = its own alert level
+            reasons.append({"detector": "coraza", "score": cz["score"], "strength": min(cz["score"] / 10, 1),
+                            "detail": cz["rules"] or cz.get("error", "")})
+        if self.bot is not None:
+            s, detail, info["_bot_entry"] = self.bot.inspect(info)
+            if s:
+                reasons.append({"detector": "bot", "score": round(s, 3), "strength": s, "detail": detail})
+        if self.intel is not None and (found := self.intel.check(ip))[0]:
+            reasons.append({"detector": "intel", "score": found[0], "strength": found[0], "detail": found[1]})
         silenced = exempt_detectors(self.store.exemption_cache, info["path"], info["query"], body) if self.store else set()
         for r in reasons:
             if r["detector"] in silenced and r["strength"] > 0:
@@ -241,12 +271,17 @@ class Engine:
         risk = fuse({r["detector"]: r["strength"] for r in reasons})
         thr, mode = route.get("threshold", self.threshold), route.get("mode", self.mode)
         action = "allow" if risk < thr else ("block" if mode == "block" else "monitor")
+        self.risk_ewma[ip] = 0.8 * self.risk_ewma.get(ip, 0.0) + 0.2 * risk
+        if len(self.risk_ewma) > 50_000:
+            self.risk_ewma.clear()
         return Verdict(risk, action, [r for r in reasons if r["strength"] > 0] or reasons[:1])
 
     def observe(self, info: dict, status: int) -> None:
         """Feed the application's answer back into the stateful detectors."""
         if "_entry" in info:
             info["_entry"][2] = status
+        if "_bot_entry" in info:
+            info["_bot_entry"][2] = status
         if info["path"] == "/login" and status in (401, 403):
             self.rules.failures[info["client_ip"]].append(info["ts"])
 

@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS feedback(event_id INTEGER PRIMARY KEY, verdict TEXT, 
 CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, ts REAL, actor TEXT, action TEXT, detail TEXT);
 """
 COLUMNS = ["ts", "request_id", "client_ip", "method", "host", "path", "query", "user_agent", "body_snippet",
-           "upstream_status", "action", "risk", "detectors", "reasons", "latency_ms", "route"]
+           "upstream_status", "action", "risk", "detectors", "reasons", "latency_ms", "route", "response_flags", "resp_bytes"]
+ADDED = {"events": {"response_flags": "TEXT", "resp_bytes": "INTEGER"}, "lists": {"expires": "REAL"}}   # additive migrations
 _SECRET = re.compile(r'''(?ix)("?[\w-]*(?:pass(?:word|wd)?|pwd|token|secret|api[_-]?key|authorization|cvv|card(?:number)?)[\w-]*"?\s*[:=]\s*)
                          ("(?:[^"\\]|\\.)*"|[^&\s,}]+)''')
 
@@ -44,10 +45,20 @@ class Store:
         self._db = sqlite3.connect(path, check_same_thread=False)
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.executescript(SCHEMA)
+        for table, cols in ADDED.items():                 # older databases get the new columns, nothing is rewritten
+            have = {r[1] for r in self._db.execute(f"PRAGMA table_info({table})")}
+            for col, typ in cols.items():
+                if col not in have:
+                    self._db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
+        self._db.commit()
         self._queue: queue.Queue = queue.Queue()
         self._nets: dict[str, list] = {"allow": [], "deny": []}
-        for ip, kind in self._db.execute("SELECT ip, kind FROM lists"):
-            self._nets[kind].append(ipaddress.ip_network(ip, strict=False))
+        self._expires: dict = {}                          # network -> unix time after which the entry no longer applies
+        for ip, kind, exp in self._db.execute("SELECT ip, kind, expires FROM lists"):
+            net = ipaddress.ip_network(ip, strict=False)
+            self._nets[kind].append(net)
+            if exp:
+                self._expires[net] = exp
         self.exemption_cache = self.exemptions()          # read on every request by the engine, so kept in memory
         threading.Thread(target=self._writer, daemon=True).start()
 
@@ -73,21 +84,31 @@ class Store:
             for _ in batch:
                 self._queue.task_done()
 
-    def events(self, since=0.0, action=None, ip=None, path=None, min_risk=0.0, before_id=None, limit=100) -> list[dict]:
+    def events(self, since=0.0, action=None, ip=None, path=None, min_risk=0.0, before_id=None, limit=100,
+               until=None, flagged=False, traps=False) -> list[dict]:
         where, args = ["ts >= ?", "risk >= ?"], [since, min_risk]
+        if flagged:                                      # blocked or would_block (used by incidents and reports)
+            where.append("action != 'allowed'")
+        if traps:                                        # response leaks, honeypot hits, canary use: found even in a busy log
+            where.append("((response_flags IS NOT NULL AND response_flags != '[]') OR reasons LIKE '%\"honeypot\"%' OR reasons LIKE '%\"canary_used\"%')")
         for cond, val in [("action = ?", action), ("client_ip = ?", ip), ("path LIKE ?", path and f"%{path}%"),
-                          ("id < ?", before_id)]:
+                          ("id < ?", before_id), ("ts < ?", until)]:
             if val is not None:
                 where.append(cond)
                 args.append(val)
         with self._lock:
             cur = self._db.execute(f"SELECT id,{','.join(COLUMNS)} FROM events WHERE {' AND '.join(where)} "
-                                   f"ORDER BY id DESC LIMIT ?", [*args, min(int(limit), 1000)])
+                                   f"ORDER BY id DESC LIMIT ?", [*args, min(int(limit), 50000 if flagged else 1000)])
             names = [d[0] for d in cur.description]
             rows = [dict(zip(names, r)) for r in cur.fetchall()]
         for r in rows:
             r["detectors"], r["reasons"] = json.loads(r["detectors"] or "{}"), json.loads(r["reasons"] or "[]")
+            r["response_flags"] = json.loads(r["response_flags"] or "[]")
         return rows
+
+    def flagged(self, since=0.0, until=None, limit=5000) -> list[dict]:
+        """Flagged events in [since, until), newest first (one query: paging by id re-scans the table every page)."""
+        return self.events(since=since, until=until, flagged=True, limit=limit)
 
     def stats(self, since_s: int = 3600) -> dict:
         since = time.time() - since_s
@@ -105,10 +126,11 @@ class Store:
                 "SELECT CAST(ts/60 AS INT)*60, COUNT(*), SUM(action != 'allowed') FROM events WHERE ts >= ? "
                 "GROUP BY 1 ORDER BY 1")]
             lat = [r[0] for r in q("SELECT latency_ms FROM events WHERE ts >= ? ORDER BY latency_ms LIMIT 100000")]
+            leaks = q("SELECT COUNT(*) FROM events WHERE ts >= ? AND response_flags IS NOT NULL AND response_flags != '[]'")[0][0]
         pick = lambda p: round(lat[min(len(lat) - 1, int(len(lat) * p))], 3) if lat else 0.0
         return {"window_s": since_s, "total": total, "avg_risk": round(avg_risk, 4), "by_action": by_action,
                 "latency_ms": {"p50": pick(0.5), "p95": pick(0.95), "max": round(lat[-1], 3) if lat else 0.0},
-                "top_ips": top_ips, "top_paths": top_paths, "timeline": timeline}
+                "top_ips": top_ips, "top_paths": top_paths, "timeline": timeline, "leaks": leaks}
 
     # --- lists ----------------------------------------------------------------------------------
     def listed(self, ip: str, kind: str) -> bool:
@@ -116,22 +138,32 @@ class Store:
             addr = ipaddress.ip_address(ip)
         except ValueError:
             return False
-        return any(addr in net for net in self._nets[kind])
+        now = time.time()
+        for net in list(self._nets[kind]):
+            if addr in net:
+                if self._expires.get(net, now + 1) <= now:         # temporary ban (honeypot) has run out
+                    self.remove_list(str(net.network_address) if net.num_addresses == 1 else str(net))
+                    continue
+                return True
+        return False
 
     def lists(self) -> list[dict]:
         with self._lock:
-            cur = self._db.execute("SELECT ip, kind, note, created FROM lists ORDER BY created")
-            return [dict(zip(("ip", "kind", "note", "created"), r)) for r in cur.fetchall()]
+            cur = self._db.execute("SELECT ip, kind, note, created, expires FROM lists ORDER BY created")
+            return [dict(zip(("ip", "kind", "note", "created", "expires"), r)) for r in cur.fetchall()]
 
-    def add_list(self, ip: str, kind: str, note: str = "") -> None:
+    def add_list(self, ip: str, kind: str, note: str = "", ttl_s: float | None = None) -> None:
         net = ipaddress.ip_network(ip, strict=False)          # raises ValueError on garbage
         if kind not in self._nets:
             raise ValueError("kind must be allow or deny")
         self.remove_list(ip)
         with self._lock:
-            self._db.execute("INSERT INTO lists VALUES(?,?,?,?)", (ip, kind, note, time.time()))
+            self._db.execute("INSERT INTO lists(ip,kind,note,created,expires) VALUES(?,?,?,?,?)",
+                             (ip, kind, note, time.time(), time.time() + ttl_s if ttl_s else None))
             self._db.commit()
         self._nets[kind].append(net)
+        if ttl_s:
+            self._expires[net] = time.time() + ttl_s
 
     def remove_list(self, ip: str) -> bool:
         net = ipaddress.ip_network(ip, strict=False)
@@ -141,6 +173,7 @@ class Store:
         for nets in self._nets.values():
             if net in nets:
                 nets.remove(net)
+        self._expires.pop(net, None)
         return bool(n)
 
     # --- settings -------------------------------------------------------------------------------

@@ -16,16 +16,17 @@ from pathlib import Path
 import httpx
 import joblib
 from fastapi import APIRouter, HTTPException, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from scipy.sparse import csr_matrix, hstack
 
 from detection.ml_payload import _stats, request_text
 from detection.rules import RULES, extract_values, normalize, stateless_hits
 from detection.run_novel import requests as novel_requests
+from wafgw import report as wafreport
 from wafgw.policy import DETECTORS, fuse, param_names, replay
 
 router = APIRouter(prefix="/api")
-PASSTHROUGH = {"events", "stats", "mode", "lists", "exemptions", "feedback", "audit", "routes", "policy", "settings", "health", "schema", "reload"}
+PASSTHROUGH = {"events", "stats", "mode", "lists", "exemptions", "feedback", "audit", "routes", "policy", "settings", "health", "schema", "reload", "intel", "bots", "incidents", "report", "reports", "explainer", "leaks"}
 _gw: httpx.AsyncClient | None = None
 ALERT_LOG: deque = deque(maxlen=50)
 RULE_BY_ID = {r.id: r for r in RULES}
@@ -51,7 +52,7 @@ async def gw(method: str, path: str, **kw):
         raise HTTPException(502, "gateway rejected the admin token (WAF_ADMIN_TOKEN must be the same for the gateway and the console)")
     if r.status_code >= 400:
         raise HTTPException(r.status_code, r.json().get("error", "gateway error") if "json" in r.headers.get("content-type", "") else "gateway error")
-    return r.json()
+    return r.json() if "json" in r.headers.get("content-type", "") else {"text": r.text}
 
 
 # --- optional login -------------------------------------------------------------------------------
@@ -361,3 +362,16 @@ async def alert_worker(poll_s: float = 5.0) -> None:
                     await send_alert(cfg, e)
         except HTTPException:
             pass                                          # gateway down: try again next round
+
+
+# --- reports as a page (the gateway sends JSON; the console renders the HTML) -----------------------------
+@router.get("/report-html")
+async def report_html(request: Request, download: int = 0):
+    data = await gw("GET", "/api/report", params={k: v for k, v in request.query_params.items() if k != "download"})
+    return HTMLResponse(wafreport.render_html(data), headers={"content-disposition": 'attachment; filename="aegis-report.html"'} if download else {})
+
+
+@router.get("/report-file/{name}")
+async def report_file(name: str):
+    data = await gw("GET", f"/api/reports/{name}")
+    return HTMLResponse(data["text"]) if "text" in data else JSONResponse(data)

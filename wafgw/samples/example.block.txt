@@ -1,0 +1,5 @@
+# Example blocklist (documentation addresses, safe to keep). Copy into data/intel/ to try it.
+# Plain IPs or CIDRs; text after ';' or '#' is kept as the note (Spamhaus DROP / FireHOL files work as they are).
+192.0.2.0/24 ; SBL-EXAMPLE test net 1
+198.51.100.23
+203.0.113.0/25 ; example scanner range

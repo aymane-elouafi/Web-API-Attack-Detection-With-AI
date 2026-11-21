@@ -18,7 +18,7 @@ admin API :9000 (bearer token)  <- dashboard / scripts
 WAF_ADMIN_TOKEN=change-me .venv/bin/python -m wafgw   # proxy :8080, admin 127.0.0.1:9000, config: waf.toml
 ```
 
-Docker: `WAF_ADMIN_TOKEN=change-me docker compose up --build` (see `docker-compose.yml`).
+Docker: `cp .env.example .env`, set `WAF_ADMIN_TOKEN`, then `docker compose up --build -d` (see `docker-compose.yml` and `docs/DEPLOYMENT.md`).
 Without `WAF_ADMIN_TOKEN` the admin API is not started (the proxy still runs). Without trained
 models the gateway runs with rules only and says so at start-up.
 Start in `monitor`, watch the events, then `POST /api/mode {"mode":"block"}`.
@@ -133,6 +133,45 @@ Exemptions can silence `schema` like any detector. `GET /api/schema` (admin): `{
 `/api/health` models now include `schema`. Learning guard: a field, value or character needs 5+ sightings and 0.5% of the
 endpoint's requests; the learning window must still be clean (attacks repeated 5+ times look normal).
 
+## Response protection (`response`) and honeypots
+
+**Leaks.** The gateway reads the application's text/JSON answers (first `max_inspect_bytes`, default 64 KB, before any byte is
+sent; larger or binary bodies keep streaming untouched) and looks for: stack traces (Python/Java/PHP/.NET/Node), SQL/DB errors,
+private keys, AWS keys, JWTs, `password`/`secret`/`api_key` fields, Luhn-valid card numbers, SSNs, valid IBANs, 5+ distinct
+e-mail addresses, directory listings, debug banners, and a response far bigger than the route's running median
+(`size_anomaly`, needs 20 samples). Strengths are fixed policy (0.4-1.0), combined by noisy-OR into one `response` reason.
+A finding never changes the request-side `risk`, `detectors` or `action`.
+
+| `[response] action` | effect (block mode) | in monitor mode |
+|---|---|---|
+| `alert` (default) | logged only | logged only |
+| `redact` | secrets, cards, keys, IBANs replaced by `[redacted]` (JSON shape kept; stack traces/SQL errors cannot be redacted, they stay alerts) | logged only, traffic untouched |
+| `block` | answer replaced by `502 response blocked` when the combined strength >= 0.5 (event `action = blocked`) | logged only |
+
+The gateway asks the application for an uncompressed answer (`Accept-Encoding: identity`) so there is something readable to scan.
+Cost: ~0.02 ms for a 100-byte answer, ~0.3 ms for 2 KB, ~15 ms for 64 KB of JSON, worst case (adversarial text) ~50 ms; the
+scan runs in the event loop, so lower `max_inspect_bytes` on very busy sites.
+
+**Honeypots and canaries.** `[honeypots] paths` (default `/admin.bak /.env /.git/config /wp-login.php /phpmyadmin /api/internal
+/backup.sql`) are answered by the gateway itself with believable fakes and never reach the application. A hit is logged with
+`risk 0.95`, reason `honeypot`, `action blocked`. In block mode the client IP is also put on the deny list for `ban_minutes`
+(default 30, 0 = never; allow-listed IPs are never banned; monitor mode never bans). The fakes carry **canary credentials**
+(an AWS-style key, an API key, a password) derived from a per-installation seed kept in the store. If one comes back in a
+request (Authorization header, cookie, query or body) the event gets reason `canary_used`, `risk 1.0`, and the request is
+blocked in block mode (would_block in monitor mode) and the IP banned. The canary values are never written to the log.
+
+Event columns added (additive migration of existing databases): `response_flags` (JSON list `{kind, detail, strength}`),
+`resp_bytes`; `lists.expires` (unix time, `null` = permanent; expired bans are dropped on lookup). `GET /api/stats` gains `leaks`.
+`GET /api/events` accepts `traps=1` internally via the store (`events(traps=True)`: leaks, honeypot and canary events only).
+
+| call | |
+|---|---|
+| `GET /api/leaks` | last 24 h: `{settings, kinds:{kind:n}, leaks, honeypot_hits, canary_hits, recent_leaks[], recent_hits[]}` |
+| `POST /api/leaks/settings` | `{"response":{"enabled":true,"action":"alert\|redact\|block"},"honeypots":{"enabled":true,"canary":true,"ban_minutes":30}}`; stored, active within a second; honeypot paths stay in `waf.toml` |
+
+Console: page **Honeypots & Leaks** (counts, settings, recent leaks and trap hits), `leak` / `honeypot` / `canary used` chips in Events,
+and a "Leaks and traps" section in the event drawer.
+
 ## Known limits
 
 Single process (detectors run in the event loop: about 0.3 ms added per request for repeated
@@ -140,3 +179,124 @@ requests, about 5 ms for new text, because the payload model runs through scikit
 memory and is lost on restart; TLS is terminated on the proxy port only (no certificate renewal, no SNI per site);
 no WebSocket proxying (refused with 501); uvicorn has no header-read timeout, so put a load balancer or nginx in front
 for protection against slow-header (slowloris) clients; the event log is not rotated.
+
+## Bots, adaptive rate limit and threat intel
+
+Two more detectors feed the same noisy-OR fusion (strength 0.5 = would alert alone). They need no model
+files and are on by default (`[bot] enabled`, `[intel] enabled` in `waf.toml`).
+
+**`bot`** (`wafgw/bot.py`) - is the client a machine, and a hostile one? Never decided by the User-Agent
+alone. Findings carry a plain-language reason (`kind: detail`, joined by `; `):
+
+| finding | strength | when |
+|---|---|---|
+| attack tool | 0.6 | User-Agent names a scanner (sqlmap, nikto, nuclei, wfuzz, gobuster, hydra, ...) |
+| automation client / no user agent | 0.15 | curl, python-requests, Go-http-client, ...; empty UA (legitimate scripts exist) |
+| fake browser | 0.1-0.2 | a browser UA that sends no `Accept` / `Accept-Language` header (needs the proxy headers) |
+| old protocol | 0.1 | HTTP/1.0 |
+| machine timing | 0.35 | >= 10 requests in 60 s at a steady <= 5 s rhythm (gap variation < 20%) |
+| burst | 0.3 / 0.5 | >= 5 / >= 15 requests per second |
+| URL walking | 0.5 | >= 8 different URLs, >= 50% of them 404 |
+| credential guessing | 0.5 | >= 80% of the last >= 10 requests refused with 401/403 |
+| failing sweep | 0.4 | >= 80% of the last >= 10 requests failed (other 4xx/5xx) |
+| no session | 0.2 | >= 20 requests in 60 s without any cookie or token |
+
+Rhythm findings use the answers the application gave (`Engine.observe`). Strengths are a stated policy, not
+tuned on test labels (one split, credential guessing vs failing sweep, was made after a first run showed
+brute force at 0.4; see the numbers below).
+
+**Adaptive rate limit** (`[rate_limit]`, off by default): the token bucket per client now shrinks with the
+client's recent risk (EWMA of its fused risk): rate x (1 - 0.85 x risk), burst likewise, never below 2.
+`adaptive = false` restores the fixed limit. A route may override: `[[routes]] prefix = "/login"`,
+`rate_per_s = 1`, `burst = 5`.
+
+**`intel`** (`wafgw/intel.py`) - IP reputation from local files you provide (nothing is downloaded):
+`<dir>/*.block.txt` (blocklist: IP or CIDR per line, `#`/`;` comments, `1.2.3.0/24 ; SBL123` Spamhaus DROP and
+FireHOL netsets work as they are), `<dir>/*.allow.txt` (these clients skip inspection) and `<dir>/networks.csv`
+(`cidr,country,asn[,org]`, header optional) which `country_deny = ["KP"]` / `asn_deny = [64500]` use. Default
+dir `data/intel/`; tiny examples are in `wafgw/samples/`. Blocklist hit 0.8, country/ASN rule 0.6, DNSBL hit
+0.7. Lookups are longest-prefix matches in <= 33 dict lookups, so 100k-entry lists cost microseconds. Files are
+re-read when their modification time changes (every ~5 s check) and on `POST /api/reload`. Optional DNSBL
+(`dnsbl_enabled = true`, `dnsbl_zones = ["zen.spamhaus.org"]`) runs in background threads with a 1 h cache: the
+first request from an unknown IP is never delayed (it simply counts as clean).
+
+```toml
+[intel]
+enabled = true
+dir = "data/intel"
+country_deny = []        # ISO codes, needs networks.csv
+asn_deny = []
+dnsbl_enabled = false
+dnsbl_zones = []
+[bot]
+enabled = true
+```
+
+Admin API additions (all need the bearer token):
+
+| endpoint | purpose |
+|---|---|
+| `GET /api/bots?min_strength=0.25` | clients the bot detector fired on (24 h): requests, strength, finding counts, `gaps` (rhythm) |
+| `GET /api/intel` | loaded files (entries, skipped lines, mtime), country/ASN rules, counts, `hits_24h`, `top_hits` |
+| `POST /api/intel/import` `{kind: blocklist\|allowlist\|networks, name, text}` | validate and save a list (10 MB max, atomic write), reload |
+| `GET /api/intel/export?kind=&name=` | the list as text |
+| `DELETE /api/intel/{kind}/{name}` | remove a list file |
+| `GET /api/intel/lookup?ip=` | what is known about one IP and why it scores |
+| `GET/POST /api/intel/policy` `{country_deny, asn_deny}` | runtime country/ASN rules (persisted in `settings`) |
+
+Events add reasons with detector `bot` or `intel` (`intel_allow` for allowlisted clients); both can be silenced by an
+exemption like any detector. The proxy now passes `headers` (raw, ordered) and `http_version` to the engine.
+
+Offline check of the bot detector on the dataset (UA + rhythm only, the dataset has no other headers):
+`python -m wafgw.eval_bot`.
+
+## Coraza + OWASP CRS as a detector (`coraza`)
+
+Optional. A Coraza side-car (`waf/`, started with `INSPECT_ONLY=1`) answers `204` with its verdict headers
+(`X-WAF-Score`, `X-WAF-Rules`) and never touches the application. The gateway sends it a copy of each request
+BEFORE deciding, and fuses the verdict like any detector: strength = `min(score / 10, 1)` (CRS score 5 = alert),
+rule ids in the reason detail, exemptions can silence it. Enable with `[coraza] enabled = true` / `url` in
+`waf.toml` or `WAFGW_CORAZA_URL=http://coraza:8081` (also enables it). If the side-car is down or slower than
+`timeout_s`, the request is still judged by the other detectors and the reason says `coraza unavailable`.
+Cost measured in Docker: about +4 ms p50. Why not "gateway -> Coraza -> application" (chain)? In that layout the
+verdict only exists in the application's RESPONSE, after the application has already run the request, so block
+mode could not stop anything.
+
+Note: CRS rule 920350 ("Host header is a numeric IP") adds a little to every request reached by IP address;
+use a real host name in front of the gateway.
+
+## Incidents, AI explainer and reports
+
+**Incidents** (`wafgw/incidents.py`, no LLM needed). Flagged events from one client are grouped into an incident
+(a quiet gap of 300 s ends it). Each incident is classified from what fired (rule ids, schema finding kinds, behavior
+features, payload-ML text) and written up deterministically: what happened, which detectors agreed (confidence),
+severity (worst technique x risk, plus whether the application answered 2xx, volume and breadth), the impact
+(`blocked | failed | possibly_succeeded | unknown`, from `upstream_status`, and a login that works after 5+ failures),
+references (OWASP API Security Top 10, OWASP Top 10 2021, CWE, MITRE ATT&CK), fix guidance and one-click actions
+(`ban`, `block_mode`, `review_event`). Identical consecutive requests collapse into one timeline step.
+
+| Endpoint | |
+|---|---|
+| `GET /api/incidents?since=&until=&gap=&limit=` | most severe first, without timeline/narrative |
+| `GET /api/incidents/{id}` | full story; `id` is the first event id of the incident |
+| `POST /api/incidents/{id}/narrative` | LLM paragraph; **403 unless `[explainer]` is enabled**, 502 if the endpoint fails |
+| `GET /api/explainer` | `{enabled, model, format, sends_ip, endpoint_host}` (never the key) |
+| `GET /api/report?since=&until=` or `window_h=` | the JSON report |
+| `GET /api/reports` / `POST /api/reports` | list saved files + schedule / build and save one now (webhook if `reports.webhook`) |
+| `GET /api/reports/{name}` | one saved `.html` / `.json` (names are validated) |
+
+**LLM explainer** (`wafgw/explainer.py`) is OFF by default and never required. With `[explainer] enabled = true` plus
+`url`, `model` (and `api_key_env`, the NAME of the env var holding the key) any OpenAI- or Anthropic-compatible
+endpoint (for example a local gateway such as OmniRoute) gets only the computed facts: technique names, counts,
+outcome, the order of events, path shapes. Never sent: request bodies, headers, query strings, free-text evidence, or
+the full client IP (last octet masked unless `send_ip = true`). The console labels the result "AI-written".
+
+**Reports** (`wafgw/report.py`): executive summary, traffic, top paths/clients, attack types with references, notable
+incidents with timelines, false-positive review (events you marked benign), detector agreement matrix (and what each
+detector caught alone), recommendations. The HTML is self-contained with print CSS (browser Print > Save as PDF).
+`[reports] enabled = true` writes `data/reports/YYYY-MM-DD_HHMM.html` + `.json` every `every_h` hours and can send a
+summary to the Alerts webhook. At most the newest 20,000 flagged events are analysed per report (the page says so).
+
+The console adds **Incidents** and **Reports** pages (`dashboard/static/incidents.js`) and two routes:
+`/api/report-html?window_h=24[&download=1]` renders the report from the gateway's JSON, `/api/report-file/{name}`
+serves a saved one.
