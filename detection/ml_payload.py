@@ -25,6 +25,7 @@ from sklearn.model_selection import GroupKFold
 from sklearn.preprocessing import MaxAbsScaler
 
 from detection.rules import extract_values
+from detection.tokens import tokenize
 from traffic.payloads import BENIGN_TEXT
 
 TRAIN_ATTACKS = {"sqli", "xss", "path_traversal", "mass_assignment"}
@@ -69,16 +70,29 @@ def benign_extras() -> tuple[list[str], np.ndarray]:
 
 
 class PayloadModel:
+    """Two linear models averaged: one reads what the text LOOKS like (character n-grams + numeric stats), the other
+    what it is BUILT from (token classes, see detection/tokens.py). Averaging beat either alone and beat stacking both
+    feature sets in one model, which let the token features pull weight away from the n-grams (measured on CSIC)."""
+    use_tokens = True
+
     def fit(self, texts, nums, y, sample_weight=None):
         self.tfidf = TfidfVectorizer(analyzer="char", ngram_range=(2, 4), min_df=2, sublinear_tf=True)
         self.scale = MaxAbsScaler()
         X = hstack([self.tfidf.fit_transform(texts), csr_matrix(self.scale.fit_transform(nums))]).tocsr()
         self.clf = LogisticRegression(C=10, max_iter=2000, class_weight="balanced").fit(X, y, sample_weight=sample_weight)
+        self.tok = self.tok_clf = None
+        if self.use_tokens:
+            self.tok = TfidfVectorizer(analyzer="word", token_pattern=r"\S+", ngram_range=(1, 4), min_df=2, sublinear_tf=True)
+            self.tok_clf = LogisticRegression(C=10, max_iter=2000, class_weight="balanced").fit(
+                self.tok.fit_transform([tokenize(t) for t in texts]), y, sample_weight=sample_weight)
         return self
 
     def score(self, texts, nums) -> np.ndarray:
         X = hstack([self.tfidf.transform(texts), csr_matrix(self.scale.transform(nums))]).tocsr()
-        return self.clf.predict_proba(X)[:, 1]
+        p = self.clf.predict_proba(X)[:, 1]
+        if getattr(self, "tok_clf", None) is None:      # models saved before token features existed
+            return p
+        return (p + self.tok_clf.predict_proba(self.tok.transform([tokenize(t) for t in texts]))[:, 1]) / 2
 
 
 def out_of_fold_scores(df: pd.DataFrame, folds: int = 5) -> np.ndarray:

@@ -174,6 +174,23 @@ was written after seeing which blind sentences failed, so the 5.5% / 1.0% figure
 is spent. Through the whole gateway (rules + model + schema) the same 600 requests gave 101 false alarms before and 34 after.
 Write a fresh blind set before trusting a further improvement; keep monitor mode and exemptions for free-text routes.
 
+### Parser-style token model (added to the payload classifier)
+
+The payload classifier is now two linear models whose probabilities are averaged: character n-grams (what the text
+looks like) and token-class n-grams (what it is built from: `' or 1=1 --` becomes `q K:or n = n c` whatever the numbers
+or spacing, see `detection/tokens.py`). Same training data, held-out CSIC 2010, 30 novel attacks, 200-sentence harmless set:
+
+| model | CSIC recall | CSIC SQLi | CSIC XSS | CSIC false alarms | novel caught | look-alike false alarms | harmless-set false alarms |
+|---|---|---|---|---|---|---|---|
+| character n-grams only | 19.8% | 78.7% | 96.0% | 0.22% | 29/30 | 1/15 | 4.3% |
+| token classes only | 31.2% | 97.5% | 86.1% | 0.23% | 30/30 | 3/15 | 14.0% |
+| **average (shipped)** | **24.4%** | **94.8%** | **93.9%** | **0.09%** | **30/30** | **0/15** | 4.7% |
+
+Putting both feature sets into ONE model was worse than either alone (SQLi 67%): the token columns pulled weight away
+from the n-grams. The first tokenizer also had a bug the CSIC misses exposed (a balanced-string rule let one stray
+quote swallow the injection after it). The harmless set was already spent when this was measured. Overall CSIC recall
+stays low because most CSIC attacks are structural (no attack text): that is the schema detector's job.
+
 ### Behavior model (AI model #2)
 
 Unsupervised, no labels: for each request it summarises what that client did in the last 60 s
@@ -378,6 +395,7 @@ detection/ml_behavior.py unsupervised behavior model (rolling per-client feature
 detection/schema.py     API schema detector (learned or OpenAPI)
 detection/fusion.py     noisy-OR score fusion
 detection/external_data.py  loaders/dedupe for real datasets (FWAF, CSIC 2010, payload corpora)
+detection/tokens.py                        token-class (parser-style) features
 detection/benign_text.py, harmless_set.py  hard-negative generator and the blind harmless test set
 detection/run_*.py      evaluation scripts (rules, waf, ml, behavior, novel, fusion, external, schema)
 detection/metrics.py, report.py  shared metrics and report printing
