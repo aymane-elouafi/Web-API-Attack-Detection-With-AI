@@ -38,7 +38,7 @@ def redact(text: str, limit: int = 2048) -> str:
 
 
 class Store:
-    def __init__(self, path: str):
+    def __init__(self, path: str, start_writer: bool = True):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.path = path
         self._lock = threading.Lock()
@@ -52,15 +52,23 @@ class Store:
                     self._db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
         self._db.commit()
         self._queue: queue.Queue = queue.Queue()
-        self._nets: dict[str, list] = {"allow": [], "deny": []}
-        self._expires: dict = {}                          # network -> unix time after which the entry no longer applies
-        for ip, kind, exp in self._db.execute("SELECT ip, kind, expires FROM lists"):
-            net = ipaddress.ip_network(ip, strict=False)
-            self._nets[kind].append(net)
-            if exp:
-                self._expires[net] = exp
+        self.refresh_lists()
         self.exemption_cache = self.exemptions()          # read on every request by the engine, so kept in memory
-        threading.Thread(target=self._writer, daemon=True).start()
+        if start_writer:
+            threading.Thread(target=self._writer, daemon=True).start()
+
+    def refresh_lists(self) -> None:
+        """(Re)load allow/deny lists from the database; worker processes call this to see bans made by others."""
+        nets: dict[str, list] = {"allow": [], "deny": []}
+        expires: dict = {}
+        with self._lock:
+            rows = self._db.execute("SELECT ip, kind, expires FROM lists").fetchall()
+        for ip, kind, exp in rows:
+            net = ipaddress.ip_network(ip, strict=False)
+            nets[kind].append(net)
+            if exp:
+                expires[net] = exp
+        self._nets, self._expires = nets, expires
 
     # --- events ---------------------------------------------------------------------------------
     def log(self, event: dict) -> None:

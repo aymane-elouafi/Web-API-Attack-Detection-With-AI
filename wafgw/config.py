@@ -5,7 +5,7 @@ from pathlib import Path
 
 DEFAULTS = {
     "proxy": {"listen": "0.0.0.0:8080", "upstream": "http://127.0.0.1:8000", "max_body_bytes": 1048576,
-              "inspect_bytes": 65536, "upstream_timeout_s": 30, "body_timeout_s": 30, "trust_forwarded": False},
+              "inspect_bytes": 65536, "upstream_timeout_s": 30, "body_timeout_s": 30, "trust_forwarded": False, "workers": 1},
     "tls": {"cert": "", "key": ""},
     "engine": {"mode": "monitor", "threshold": 0.5, "on_error": "fail_open"},
     "admin": {"listen": "127.0.0.1:9000"},
@@ -38,6 +38,8 @@ def load(path: str | None = None) -> dict:
             cfg[section][name] = env[key]
     if env.get("WAFGW_CORAZA_URL"):                           # setting the URL switches the Coraza detector on
         cfg["coraza"].update(enabled=True, url=env["WAFGW_CORAZA_URL"])
+    if env.get("WAFGW_WORKERS"):
+        cfg["proxy"]["workers"] = int(env["WAFGW_WORKERS"])
     if env.get("WAFGW_TRUST_FORWARDED"):                       # demo replays send the client IP in X-Forwarded-For
         cfg["proxy"]["trust_forwarded"] = env["WAFGW_TRUST_FORWARDED"].lower() in ("1", "true", "yes")
     return cfg

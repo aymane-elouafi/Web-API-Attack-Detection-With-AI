@@ -2,6 +2,7 @@
 # Env overrides: WAFGW_CONFIG (path), WAFGW_UPSTREAM, WAFGW_MODE, WAFGW_DB, WAFGW_ADMIN_LISTEN, WAFGW_TRUST_FORWARDED, WAF_ADMIN_TOKEN.
 
 [proxy]
+workers = 1   # >1: that many gateway processes on one port (see docs/PERFORMANCE.md for what they do not share)
 listen = "0.0.0.0:8080"          # where clients connect
 upstream = "http://127.0.0.1:8000"  # the application being protected
 max_body_bytes = 1048576          # bigger request bodies get 413

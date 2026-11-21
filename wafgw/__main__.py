@@ -1,7 +1,9 @@
 """python -m wafgw [--config waf.toml]  -> proxy + admin API in one process."""
 import argparse
 import asyncio
+import multiprocessing
 import os
+import socket
 import sys
 
 import uvicorn
@@ -38,13 +40,47 @@ async def watch_models(engine: Engine) -> None:
         engine.reload_models()
 
 
+async def sync_state(engine: Engine, store: Store, parent: int) -> None:
+    """Worker processes: pick up bans, settings and exemptions changed by the admin API or by another worker."""
+    while True:
+        await asyncio.sleep(2)
+        if os.getppid() != parent:                  # the main process is gone: do not live on as an orphan
+            os._exit(0)
+        store.refresh_lists()
+        engine.reload_policy()
+
+
+def worker_main(cfg: dict, parent: int) -> None:
+    """One proxy worker: its own engine, store connection and listening socket (SO_REUSEPORT: the kernel spreads new connections)."""
+    sock = socket.socket()
+    for opt in (socket.SO_REUSEADDR, socket.SO_REUSEPORT):
+        sock.setsockopt(socket.SOL_SOCKET, opt, 1)
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)   # without it a pre-bound socket adds ~40 ms (Nagle + delayed ACK) per answer
+    sock.bind(_addr(cfg["proxy"]["listen"]))
+    sock.listen(2048)
+    store = Store(cfg["store"]["path"])
+    engine = Engine(cfg, store)
+
+    async def serve() -> None:
+        server = uvicorn.Server(proxy_config(cfg, build_app(cfg, engine, store)))
+        await asyncio.gather(watch_models(engine), sync_state(engine, store, parent), server.serve(sockets=[sock]))
+
+    asyncio.run(serve())
+
+
 async def run(cfg: dict) -> None:
+    n = cfg["proxy"]["workers"]
+    if n > 1:                                   # fork BEFORE any thread exists (the Store starts one)
+        Store(cfg["store"]["path"], start_writer=False)   # create/migrate the tables once, so workers do not race on a fresh database
+        for _ in range(n):
+            multiprocessing.get_context("fork").Process(target=worker_main, args=(cfg, os.getpid()), daemon=True).start()
     store = Store(cfg["store"]["path"])
     engine = Engine(cfg, store)
     if engine.payload is None or engine.behavior is None:
         print("warning: AI models missing in %s (run: python -m wafgw.train); rules only" % cfg["models"]["dir"], file=sys.stderr)
     servers = []
-    servers.append(uvicorn.Server(proxy_config(cfg, build_app(cfg, engine, store))))
+    if n <= 1:
+        servers.append(uvicorn.Server(proxy_config(cfg, build_app(cfg, engine, store))))
     try:
         host, port = _addr(cfg["admin"]["listen"])
         servers.append(uvicorn.Server(uvicorn.Config(build_admin(engine, store, os.environ.get("WAF_ADMIN_TOKEN"), cfg),
@@ -52,7 +88,7 @@ async def run(cfg: dict) -> None:
     except RuntimeError as exc:
         print(f"warning: {exc}", file=sys.stderr)
     print(f"gateway {'https' if cfg['tls']['cert'] else 'http'}://{cfg['proxy']['listen']} -> {cfg['proxy']['upstream']}  mode={engine.mode}  "
-          f"admin={'on ' + cfg['admin']['listen'] if len(servers) > 1 else 'OFF'}")
+          f"workers={n}  admin={'on ' + cfg['admin']['listen'] if len(servers) > (n <= 1) else 'OFF'}")
     await asyncio.gather(watch_models(engine), report.schedule(cfg, store, engine), *(s.serve() for s in servers))
 
 
